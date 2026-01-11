@@ -25,6 +25,8 @@ fi
 # TODO rather get it by listing active processes
 active=`cat gh.active`
 
+active=`test -f gh.active && cat gh.active || echo 'none'`
+
 echo "Active: $active"
 
 echo "Downloading"
@@ -59,11 +61,12 @@ echo $next > gh.active
 mv europe-latest.osm.pbf.md5.candidate europe-latest.osm.pbf.md5
 
 # wait one minute for GH to become active
+# TODO rather poll the service
 echo Waiting
 
 sleep 60
 
-ps aux | grep "java.*graphhopper.*config-freemap\\.${active}\\.yml" | awk '{print $2}' | xargs --no-run-if-empty kill
+pkill -f "java.*graphhopper.*config-freemap\\.${active}\\.yml" || true
 
 rm -f ./graphhopper.freemap.sk
 ln -s ./graphhopper.freemap.sk.${next} ./graphhopper.freemap.sk
