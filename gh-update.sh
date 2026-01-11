@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-if [ -e europe-latest.osm.pbf.md5.candidate ]; then
+if [ -e europe-latest.osm.pbf.md5.candidate ]
+then
   echo "Already processing"
   exit 0
 fi
@@ -23,8 +24,6 @@ then
 fi
 
 # TODO rather get it by listing active processes
-active=`cat gh.active`
-
 active=`test -f gh.active && cat gh.active || echo 'none'`
 
 echo "Active: $active"
@@ -39,7 +38,8 @@ echo "Extracting"
 osmium extract --set-bounds -p limit.geojson tmp/europe-latest.osm.pbf -o tmp/extract.pbf
 rm tmp/europe-latest.osm.pbf
 
-if [[ "$active" == "a" ]]; then
+if [[ "$active" == "a" ]]
+then
 	next="b"
 else
 	next="a"
