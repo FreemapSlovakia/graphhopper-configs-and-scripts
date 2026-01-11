@@ -2,8 +2,8 @@
 set -e
 
 if [ -e europe-latest.osm.pbf.md5.candidate ]; then
-  echo "Already processing - exiting"
-  exit 1
+  echo "Already processing"
+  exit 0
 fi
 
 cleanup() {
@@ -19,7 +19,7 @@ wget -q -O europe-latest.osm.pbf.md5.candidate https://download.geofabrik.de/eur
 if [ -f europe-latest.osm.pbf.md5 ] && diff -q europe-latest.osm.pbf.md5 europe-latest.osm.pbf.md5.candidate > /dev/null
 then
   echo "No update available"
-  exit 1
+  exit 0
 fi
 
 # TODO rather get it by listing active processes
@@ -48,7 +48,7 @@ echo "Importing: $next"
 rm -rf /fm/sdata/graphhopper/graph-cache.${next}
 mkdir /fm/sdata/graphhopper/graph-cache.${next}
 
-java -Xmx40g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml > /dev/null 2>&1 &
+java -Xmx40g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml > /dev/null 2>&1
 
 echo "Starting: $next"
 
