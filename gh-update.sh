@@ -1,20 +1,26 @@
 #!/bin/bash
 set -e
 
-if [ -e work.lock ]; then
-  echo "Work lock exists - exiting"
+if [ -e europe-latest.osm.pbf.md5.candidate ]; then
+  echo "Already processing - exiting"
   exit 1
 fi
 
-touch work.lock
-
 cleanup() {
-  rm -f work.lock
+  rm -f europe-latest.osm.pbf.md5.candidate
 
   echo Finished
 }
 
 trap cleanup EXIT INT TERM
+
+wget -q -O europe-latest.osm.pbf.md5.candidate https://download.geofabrik.de/europe-latest.osm.pbf.md5
+
+if [ -f europe-latest.osm.pbf.md5 ] && diff -q europe-latest.osm.pbf.md5 europe-latest.osm.pbf.md5.candidate > /dev/null
+then
+  echo "No update available"
+  exit 1
+fi
 
 # TODO rather get it by listing active processes
 active=`cat gh.active`
@@ -49,6 +55,8 @@ echo "Starting: $next"
 java -Xmx40g -jar graphhopper-web-11.0.jar server config-freemap.${next}.yml > /dev/null 2>&1 &
 
 echo $next > gh.active
+
+mv europe-latest.osm.pbf.md5.candidate europe-latest.osm.pbf.md5
 
 # wait one minute for GH to become active
 echo Waiting
