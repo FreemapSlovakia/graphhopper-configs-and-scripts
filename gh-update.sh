@@ -72,11 +72,11 @@ echo "Importing: $next"
 
 rm -rf /fm/sdata/graphhopper/graph-cache.${next} && mkdir -p /fm/sdata/graphhopper/graph-cache.${next}
 
-java -Xmx40g -jar graphhopper-web-11.0.jar import "config-freemap.${next}.yml" > /dev/null 2>&1
+nice java -Xms1g -Xmx28g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml > /dev/null 2>&1
 
 echo "Starting: $next"
 
-java -Xmx40g -jar graphhopper-web-11.0.jar server "config-freemap.${next}.yml" > /dev/null 2>&1 &
+java -Xms1g -Xmx4g -jar graphhopper-web-11.0.jar server "config-freemap.${next}.yml" > /dev/null 2>&1 &
 
 echo "Polling: $next on localhost:${next_port}"
 
