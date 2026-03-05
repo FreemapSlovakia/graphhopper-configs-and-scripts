@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 cd /opt/graphhopper
 
@@ -10,5 +11,3 @@ if ! flock -n 9; then
 fi
 
 su -c ./gh-update.sh freemap |& ts '[%Y-%m-%d %H:%M:%S]' >> gh-update.log
-
-systemctl reload nginx
