@@ -76,7 +76,7 @@ nice java -Xms1g -Xmx28g -jar graphhopper-web-11.0.jar import config-freemap.${n
 
 echo "Starting: $next"
 
-java -Xms1g -Xmx4g -jar graphhopper-web-11.0.jar server "config-freemap.${next}.yml" > /dev/null 2>&1 &
+nohup java -Xms1g -Xmx4g -jar graphhopper-web-11.0.jar server "config-freemap.${next}.yml" > /dev/null 2>&1 9>&- &
 
 echo "Polling: $next on localhost:${next_port}"
 
