@@ -1,0 +1,9 @@
+[Unit]
+Description=GraphHopper update notification (%i)
+
+[Service]
+Type=oneshot
+User=freemap
+WorkingDirectory=/opt/graphhopper
+EnvironmentFile=/opt/graphhopper/gh-update.conf
+ExecStart=/opt/graphhopper/gh-notify.sh %i

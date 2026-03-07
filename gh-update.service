@@ -1,0 +1,10 @@
+[Unit]
+Description=GraphHopper OSM update
+OnSuccess=gh-update-notify@success.service
+OnFailure=gh-update-notify@failure.service
+
+[Service]
+Type=oneshot
+User=freemap
+WorkingDirectory=/opt/graphhopper
+ExecStart=/opt/graphhopper/gh-update.sh
