@@ -44,7 +44,13 @@ if [ -f run/osm.md5 ] && [ "$(cat run/osm.md5)" = "$remote_md5" ]; then
   exit 0
 fi
 
-active=$(test -f run/active && cat run/active || echo 'none')
+if systemctl is-enabled --quiet graphhopper@a; then
+  active="a"
+elif systemctl is-enabled --quiet graphhopper@b; then
+  active="b"
+else
+  active="none"
+fi
 echo "Active: $active"
 
 if [ -f "$pbf_file" ] && [ -f run/downloaded.md5 ] && [ "$(cat run/downloaded.md5)" = "$remote_md5" ]; then
@@ -81,7 +87,6 @@ if ! wait_for_gh_ready "$next_port"; then
   exit 1
 fi
 
-echo "$next" > run/active
 echo "$remote_md5" > run/osm.md5
 
 rm -f ./graphhopper.freemap.sk
