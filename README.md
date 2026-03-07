@@ -1,36 +1,78 @@
 # GraphHopper Update Scripts
 
-These scripts keep GraphHopper data up to date with hourly cron.
+These scripts keep GraphHopper routing data up to date using systemd timers and services.
 
 ## Scripts
 
-- `gh-update-root.sh`: run by root from cron.
-- `gh-update.sh`: does download, import, and switch between instances.
+- `gh-update.sh` — downloads OSM data, imports it into the inactive instance, switches nginx to it, stops the old instance.
+- `gh-notify.sh` — sends a Mailgun email on success (only when an update was actually performed) or failure.
+
+## Systemd Units
+
+| Unit                        | Purpose                                                 |
+| --------------------------- | ------------------------------------------------------- |
+| `graphhopper@.service`      | GraphHopper routing server (instances `a` and `b`)      |
+| `gh-update.service`         | Oneshot update job                                      |
+| `gh-update.timer`           | Triggers `gh-update.service` hourly                     |
+| `gh-update-notify@.service` | Email notification, called by `OnSuccess=`/`OnFailure=` |
 
 ## What Happens
 
-1. Script checks if new OSM data is available.
-2. If yes, it imports data into inactive instance (`a` or `b`).
-3. It starts the new instance and waits until it is healthy.
-4. It switches nginx to the new instance.
-5. It reloads nginx and stops old instance.
+1. Timer triggers `gh-update.service` every hour.
+2. Script checks if new OSM data is available; exits silently if not.
+3. If yes, imports data into the inactive instance (`a` or `b`).
+4. Starts the new instance via systemd and polls until it is healthy.
+5. Switches nginx to the new instance and stops the old one.
+6. On success: `gh-update-notify@success.service` sends a notification email.
+7. On failure: `gh-update-notify@failure.service` sends a failure email. The service is left in `failed` state — the timer does not retry until the service is explicitly reset.
 
-If update is already running, next run exits safely.
+## Setup
 
-## Required Setup
-
-- Add sudoers rule for user `freemap`:
+### 1. Config file
 
 ```bash
-freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx
+cp gh-update.conf.example gh-update.conf
+chmod 600 gh-update.conf
+# fill in MAILGUN_API_KEY, MAILGUN_DOMAIN, NOTIFY_EMAIL
 ```
 
-## Cron (root)
+### 2. Sudoers
 
-```cron
-0 * * * * /opt/graphhopper/gh-update-root.sh
+```
+freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
+  /bin/systemctl enable --now graphhopper@a, /bin/systemctl enable --now graphhopper@b, \
+  /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b
 ```
 
-## Log
+### 3. Install and enable units
 
-- Main log file: `/opt/graphhopper/gh-update.log`
+```bash
+cp graphhopper@.service gh-update.service gh-update.timer gh-update-notify@.service \
+  /etc/systemd/system/
+chmod +x gh-update.sh gh-notify.sh
+systemctl daemon-reload
+
+# Start whichever graphhopper instance is currently active (e.g. a).
+# The update script will enable/disable instances automatically on each update.
+systemctl enable --now graphhopper@a.service
+
+# Enable the timer (replaces cron)
+systemctl enable --now gh-update.timer
+```
+
+## Logs
+
+```bash
+journalctl -u gh-update.service       # update job
+journalctl -u graphhopper@a.service   # instance a
+journalctl -u graphhopper@b.service   # instance b
+```
+
+## After a Failure
+
+The service is left in `failed` state. Fix the issue, then:
+
+```bash
+systemctl reset-failed gh-update.service
+systemctl start gh-update.service   # optional: trigger immediately
+```

@@ -1,0 +1,4 @@
+GEOFABRIK_URL=https://download.geofabrik.de/europe-latest.osm.pbf
+MAILGUN_API_KEY=key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+MAILGUN_DOMAIN=mg.example.com
+NOTIFY_EMAIL=admin@example.com,other@example.com

@@ -1,0 +1,14 @@
+[Unit]
+Description=GraphHopper routing server (instance %i)
+After=network.target
+
+[Service]
+Type=simple
+User=freemap
+WorkingDirectory=/opt/graphhopper
+ExecStart=java -Xms1g -Xmx4g -jar graphhopper-web-11.0.jar server config-freemap.%i.yml
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
