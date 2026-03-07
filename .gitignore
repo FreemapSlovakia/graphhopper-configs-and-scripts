@@ -1,2 +1,7 @@
 gh-update.conf
-run/
+run
+graphhopper-web-11.0.jar
+graphhopper.freemap.sk
+srtmprovider
+graph-cache.a
+graph-cache.b
