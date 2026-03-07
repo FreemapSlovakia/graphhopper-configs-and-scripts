@@ -9,11 +9,11 @@ These scripts keep GraphHopper routing data up to date using systemd timers and 
 
 ## Systemd Units
 
-| Unit | Purpose |
-|---|---|
-| `graphhopper@.service` | GraphHopper routing server (instances `a` and `b`) |
-| `gh-update.service` | Oneshot update job |
-| `gh-update.timer` | Triggers `gh-update.service` hourly |
+| Unit                        | Purpose                                                 |
+| --------------------------- | ------------------------------------------------------- |
+| `graphhopper@.service`      | GraphHopper routing server (instances `a` and `b`)      |
+| `gh-update.service`         | Oneshot update job                                      |
+| `gh-update.timer`           | Triggers `gh-update.service` hourly                     |
 | `gh-update-notify@.service` | Email notification, called by `OnSuccess=`/`OnFailure=` |
 
 ## What Happens
@@ -40,8 +40,8 @@ chmod 600 gh-update.conf
 
 ```
 freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
-  /bin/systemctl start graphhopper@a, /bin/systemctl start graphhopper@b, \
-  /bin/systemctl stop graphhopper@a,  /bin/systemctl stop graphhopper@b
+  /bin/systemctl enable --now graphhopper@a, /bin/systemctl enable --now graphhopper@b, \
+  /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b
 ```
 
 ### 3. Install and enable units
@@ -52,8 +52,9 @@ cp graphhopper@.service gh-update.service gh-update.timer gh-update-notify@.serv
 chmod +x gh-update.sh gh-notify.sh
 systemctl daemon-reload
 
-# Start graphhopper instances (whichever is currently active)
-systemctl enable --now graphhopper@a.service graphhopper@b.service
+# Start whichever graphhopper instance is currently active (e.g. a).
+# The update script will enable/disable instances automatically on each update.
+systemctl enable --now graphhopper@a.service
 
 # Enable the timer (replaces cron)
 systemctl enable --now gh-update.timer

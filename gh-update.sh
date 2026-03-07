@@ -1,10 +1,5 @@
 #!/bin/bash
 
-# NOTE: add to sudoers:
-#   freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
-#     /bin/systemctl start graphhopper@a, /bin/systemctl start graphhopper@b, \
-#     /bin/systemctl stop graphhopper@a,  /bin/systemctl stop graphhopper@b
-
 set -e
 
 echo "---BEGIN---"
@@ -77,12 +72,12 @@ rm -rf /fm/sdata/graphhopper/graph-cache.${next} && mkdir -p /fm/sdata/graphhopp
 nice java -Xms1g -Xmx28g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml
 
 echo "Starting: $next"
-sudo -n /bin/systemctl start graphhopper@${next}
+sudo -n /bin/systemctl enable --now graphhopper@${next}
 
 echo "Polling: $next on localhost:${next_port}"
 if ! wait_for_gh_ready "$next_port"; then
   echo "New instance ${next} did not become ready on localhost:${next_port}"
-  sudo -n /bin/systemctl stop graphhopper@${next} || true
+  sudo -n /bin/systemctl disable --now graphhopper@${next} || true
   exit 1
 fi
 
@@ -93,7 +88,7 @@ rm -f ./graphhopper.freemap.sk
 ln -s ./graphhopper.freemap.sk.${next} ./graphhopper.freemap.sk
 
 sudo -n /bin/systemctl reload nginx
-sudo -n /bin/systemctl stop graphhopper@${active} || true
+sudo -n /bin/systemctl disable --now graphhopper@${active} || true
 
 rm -f "$pbf_file" run/downloaded.md5 run/extract.pbf
 echo "updated" > run/result
