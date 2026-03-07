@@ -10,6 +10,8 @@ cd "$(dirname "$0")"
 # shellcheck source=gh-update.conf
 source ./gh-update.conf
 
+sudo -n /bin/systemctl stop gh-update.timer
+
 mkdir -p run
 
 # Default result; overwritten to "updated" only after a successful update.
@@ -97,4 +99,5 @@ sudo -n /bin/systemctl disable --now graphhopper@${active} || true
 
 rm -f "$pbf_file" run/downloaded.md5 run/extract.pbf
 echo "updated" > run/result
+sudo -n /bin/systemctl start gh-update.timer
 echo "Success"

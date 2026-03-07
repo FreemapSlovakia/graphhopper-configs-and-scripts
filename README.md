@@ -41,7 +41,8 @@ chmod 600 gh-update.conf
 ```
 freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
   /bin/systemctl enable --now graphhopper@a, /bin/systemctl enable --now graphhopper@b, \
-  /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b
+  /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b, \
+  /bin/systemctl stop gh-update.timer, /bin/systemctl start gh-update.timer
 ```
 
 ### 3. Install and enable units
@@ -70,9 +71,9 @@ journalctl -u graphhopper@b.service   # instance b
 
 ## After a Failure
 
-The service is left in `failed` state. Fix the issue, then:
+On failure the timer is stopped automatically, preventing retries until the issue is fixed. After fixing:
 
 ```bash
-systemctl reset-failed gh-update.service
+systemctl start gh-update.timer     # re-enable hourly runs
 systemctl start gh-update.service   # optional: trigger immediately
 ```
