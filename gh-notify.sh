@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 
 case "${1:-}" in
   success)
-    result="$(cat gh-update-result 2>/dev/null || echo skipped)"
+    result="$(cat run/result 2>/dev/null || echo skipped)"
     if [ "$result" != "updated" ]; then
       exit 0  # no update was performed; skip email
     fi

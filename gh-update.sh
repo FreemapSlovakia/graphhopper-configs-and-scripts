@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# NOTE: add to sudoers:
+#   freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
+#     /bin/systemctl start graphhopper@a, /bin/systemctl start graphhopper@b, \
+#     /bin/systemctl stop graphhopper@a,  /bin/systemctl stop graphhopper@b
+
 set -e
 
 echo "---BEGIN---"
@@ -7,9 +12,14 @@ trap 'echo "---END---"' EXIT
 
 cd "$(dirname "$0")"
 
+# shellcheck source=gh-update.conf
+source ./gh-update.conf
+
+mkdir -p run
+
 # Default result; overwritten to "updated" only after a successful update.
 # Read by gh-notify.sh to suppress the success email when there was no update.
-echo "skipped" > gh-update-result
+echo "skipped" > run/result
 
 wait_for_gh_ready() {
   local port="$1"
@@ -29,23 +39,30 @@ wait_for_gh_ready() {
   return 1
 }
 
-remote_md5="$(wget -q -O - https://download.geofabrik.de/europe-latest.osm.pbf.md5)"
+# GEOFABRIK_URL is set in gh-update.conf
+pbf_file="run/$(basename "$GEOFABRIK_URL")"
 
-if [ -f europe-latest.osm.pbf.md5 ] && [ "$(cat europe-latest.osm.pbf.md5)" = "$remote_md5" ]; then
+remote_md5="$(wget -q -O - "${GEOFABRIK_URL}.md5")"
+
+if [ -f run/osm.md5 ] && [ "$(cat run/osm.md5)" = "$remote_md5" ]; then
   echo "No update available"
   exit 0
 fi
 
-active=$(test -f gh.active && cat gh.active || echo 'none')
+active=$(test -f run/active && cat run/active || echo 'none')
 echo "Active: $active"
 
-echo "Downloading"
-rm -f tmp/europe-latest.osm.pbf tmp/extract.pbf
-wget -nv https://download.geofabrik.de/europe-latest.osm.pbf -P tmp
+if [ -f "$pbf_file" ] && [ -f run/downloaded.md5 ] && [ "$(cat run/downloaded.md5)" = "$remote_md5" ]; then
+  echo "Already downloaded, reusing $pbf_file"
+else
+  echo "Downloading"
+  rm -f "$pbf_file"
+  wget -nv "$GEOFABRIK_URL" -P run
+  echo "$remote_md5" > run/downloaded.md5
+fi
 
 echo "Extracting"
-osmium extract --set-bounds -p limit.geojson tmp/europe-latest.osm.pbf -o tmp/extract.pbf
-rm tmp/europe-latest.osm.pbf
+osmium extract --set-bounds -p limit.geojson "$pbf_file" -o run/extract.pbf
 
 if [[ "$active" == "a" ]]; then
   next="b"
@@ -69,8 +86,8 @@ if ! wait_for_gh_ready "$next_port"; then
   exit 1
 fi
 
-echo "$next" > gh.active
-printf '%s\n' "$remote_md5" > europe-latest.osm.pbf.md5
+echo "$next" > run/active
+echo "$remote_md5" > run/osm.md5
 
 rm -f ./graphhopper.freemap.sk
 ln -s ./graphhopper.freemap.sk.${next} ./graphhopper.freemap.sk
@@ -78,5 +95,6 @@ ln -s ./graphhopper.freemap.sk.${next} ./graphhopper.freemap.sk
 sudo -n /bin/systemctl reload nginx
 sudo -n /bin/systemctl stop graphhopper@${active} || true
 
-echo "updated" > gh-update-result
+rm -f "$pbf_file" run/downloaded.md5 run/extract.pbf
+echo "updated" > run/result
 echo "Success"
