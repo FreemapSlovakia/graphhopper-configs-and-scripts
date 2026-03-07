@@ -63,7 +63,7 @@ else
 fi
 
 echo "Extracting"
-osmium extract --set-bounds -p limit.geojson "$pbf_file" -o run/extract.pbf
+osmium extract --set-bounds -p limit.geojson "$pbf_file" -o run/extract.pbf --overwrite
 
 if [[ "$active" == "a" ]]; then
   next="b"
