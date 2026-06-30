@@ -77,7 +77,7 @@ fi
 
 echo "Importing: $next"
 rm -rf /fm/sdata/graphhopper/graph-cache.${next} && mkdir -p /fm/sdata/graphhopper/graph-cache.${next}
-nice java -Xms1g -Xmx28g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml
+java -Xms1g -Xmx28g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml
 
 echo "Starting: $next"
 sudo -n /bin/systemctl enable --now graphhopper@${next}

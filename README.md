@@ -74,6 +74,11 @@ journalctl -u graphhopper@b.service   # instance b
 On failure the timer is stopped automatically, preventing retries until the issue is fixed. After fixing:
 
 ```bash
-systemctl start gh-update.timer     # re-enable hourly runs
-systemctl start gh-update.service   # optional: trigger immediately
+systemctl start gh-update.timer              # re-enable hourly runs
+systemctl start --no-block gh-update.service # optional: trigger immediately
 ```
+
+`gh-update.service` is `Type=oneshot`, so `systemctl start` blocks until the
+whole update finishes (downloading the OSM extract + importing can take a long
+time). Use `--no-block` to return immediately and let it run in the background;
+follow progress with `journalctl -fu gh-update.service`.
