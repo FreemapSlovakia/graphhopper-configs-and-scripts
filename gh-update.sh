@@ -76,7 +76,10 @@ else
 fi
 
 echo "Importing: $next"
-rm -rf /fm/sdata/graphhopper/graph-cache.${next} && mkdir -p /fm/sdata/graphhopper/graph-cache.${next}
+# graph-cache.{a,b} are symlinks to the real data dir; clear the target so
+# GraphHopper imports into a clean cache without clobbering the symlink.
+cache_dir="$(readlink -f "graph-cache.${next}")"
+rm -rf "$cache_dir" && mkdir -p "$cache_dir"
 java -Xms1g -Xmx28g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml
 
 echo "Starting: $next"
