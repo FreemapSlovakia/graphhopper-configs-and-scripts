@@ -80,7 +80,7 @@ echo "Importing: $next"
 # GraphHopper imports into a clean cache without clobbering the symlink.
 cache_dir="$(readlink -f "graph-cache.${next}")"
 rm -rf "$cache_dir" && mkdir -p "$cache_dir"
-java -Xms1g -Xmx28g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml
+java -Xms2g -Xmx64g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml
 
 echo "Starting: $next"
 sudo -n /bin/systemctl enable --now graphhopper@${next}
