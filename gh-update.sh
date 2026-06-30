@@ -3,14 +3,17 @@
 set -e
 
 echo "---BEGIN---"
-trap 'echo "---END---"' EXIT
+# Stop the hourly timer only on failure, so a broken state doesn't keep
+# retrying every hour until someone intervenes (re-arm with
+# `systemctl start gh-update.timer`). Successful and no-op runs leave it
+# running. Concurrent runs are already prevented by systemd: the timer
+# won't start gh-update.service while a previous run is still active.
+trap 'rc=$?; echo "---END---"; if [ "$rc" -ne 0 ]; then sudo -n /bin/systemctl stop gh-update.timer; fi' EXIT
 
 cd "$(dirname "$0")"
 
 # shellcheck source=gh-update.conf
 source ./gh-update.conf
-
-sudo -n /bin/systemctl stop gh-update.timer
 
 mkdir -p run
 
@@ -102,5 +105,4 @@ sudo -n /bin/systemctl disable --now graphhopper@${active} || true
 
 rm -f "$pbf_file" run/downloaded.md5 run/extract.pbf
 echo "updated" > run/result
-sudo -n /bin/systemctl start gh-update.timer
 echo "Success"
