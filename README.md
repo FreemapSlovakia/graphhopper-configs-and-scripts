@@ -7,6 +7,18 @@ These scripts keep GraphHopper routing data up to date using systemd timers and 
 - `gh-update.sh` — downloads OSM data, imports it into the inactive instance, switches nginx to it, stops the old instance.
 - `gh-notify.sh` — sends a Mailgun email on success (only when an update was actually performed) or failure.
 
+State kept between runs in `run/`:
+
+| File              | Meaning                                                        |
+| ----------------- | -------------------------------------------------------------- |
+| `osm.md5`         | Checksum line of the currently imported extract                 |
+| `downloading.md5` | Checksum the partially downloaded `.pbf` is expected to have    |
+| `downloaded.md5`  | Checksum of a fully downloaded and verified `.pbf`              |
+| `mismatch.md5`    | Checksum that already failed verification once                  |
+| `result`          | `updated` / `skipped` / `retry` / `failed` — read by the mailer |
+| `fail-streak`     | Consecutive recoverable failures                                |
+| `last-error`      | Message of the most recent failure, quoted in the email         |
+
 ## Systemd Units
 
 | Unit                        | Purpose                                                 |
@@ -20,11 +32,51 @@ These scripts keep GraphHopper routing data up to date using systemd timers and 
 
 1. Timer triggers `gh-update.service` every hour.
 2. Script checks if new OSM data is available; exits silently if not.
-3. If yes, imports data into the inactive instance (`a` or `b`).
-4. Starts the new instance via systemd and polls until it is healthy.
-5. Switches nginx to the new instance and stops the old one.
-6. On success: `gh-update-notify@success.service` sends a notification email.
-7. On failure: `gh-update-notify@failure.service` sends a failure email. The service is left in `failed` state — the timer does not retry until the service is explicitly reset.
+3. If yes, downloads the extract (resuming a partial one) and verifies its checksum.
+4. Imports the data into the inactive instance (`a` or `b`).
+5. Starts the new instance via systemd and polls until it is healthy.
+6. Switches nginx to the new instance and stops the old one.
+7. On success: `gh-update-notify@success.service` sends a notification email.
+
+## Failure Handling
+
+Failures are split into two kinds, because the mirror being briefly unreachable
+is not the same as a broken import.
+
+**Recoverable** — anything network-shaped: the checksum probe or the download
+failing, the mirror serving an error page instead of a checksum, a corrupt
+download. `wget` already retries these a few times within the run; if they still
+fail, the run ends quietly with `run/result=retry`, **leaving the timer armed**
+so the next hourly run tries again. A partially downloaded `.pbf` is kept and
+resumed. Only after `NOTIFY_AFTER_FAILURES` (6) consecutive such runs does the
+script exit non-zero to trigger an email, and it repeats every 6 runs after
+that — the timer still keeps running.
+
+**Hard** — `osmium extract` failing, the GraphHopper import failing, the new
+instance never becoming healthy, any of the systemd/nginx switchover steps
+failing, or any unanticipated error. These need a human, so the timer is stopped
+to avoid re-running a broken state every hour, and
+`gh-update-notify@failure.service` sends an email saying so. A downloaded and
+verified `.pbf` is left in place, so the retry after a fix does not re-download
+it.
+
+Two cases deliberately cross over from recoverable to hard, because retrying
+them hourly costs more than it can ever gain:
+
+- `wget` exiting 3 (local file I/O error — typically a full disk).
+- The same remote checksum failing to verify twice in a row. The first mismatch
+  is retried once; a second one means the mirror or the disk is broken, not
+  unlucky, and a ~35 GB re-download per hour is not a reasonable way to find out.
+
+`gh-notify.sh` decides which email to send from `run/result`, treating anything
+other than `retry` as hard — including a run that died before it could classify
+itself.
+
+**Caveat:** stopping the timer only lasts until the next reboot. The unit stays
+`enabled`, so it is re-armed at boot and, with `Persistent=true`, fires straight
+away — resuming hourly retries of the state that failed. Use
+`systemctl disable --now gh-update.timer` if a broken state must survive a
+reboot (needs a matching sudoers entry if the script should ever do it itself).
 
 ## Setup
 
@@ -69,11 +121,15 @@ journalctl -u graphhopper@a.service   # instance a
 journalctl -u graphhopper@b.service   # instance b
 ```
 
-## After a Failure
+## After a Hard Failure
 
-On failure the timer is stopped automatically, preventing retries until the issue is fixed. After fixing:
+The timer is stopped automatically, preventing retries until the issue is fixed.
+Check with `systemctl is-active gh-update.timer` (or `systemctl list-timers
+--all gh-update.timer` — without `--all` a stopped timer is not listed at all,
+so an empty table means disarmed, not "no such timer"). After fixing:
 
 ```bash
+systemctl reset-failed gh-update.service     # clear the failed state
 systemctl start gh-update.timer              # re-enable hourly runs
 systemctl start --no-block gh-update.service # optional: trigger immediately
 ```
