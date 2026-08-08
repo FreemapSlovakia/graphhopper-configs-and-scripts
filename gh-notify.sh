@@ -1,9 +1,15 @@
 #!/bin/bash
 
-# Sends a Mailgun email notification for gh-update.service results.
-# Called by gh-update-notify@.service with argument "success" or "failure".
-# Expects MAILGUN_API_KEY, MAILGUN_DOMAIN, NOTIFY_EMAIL in the environment
-# (set via EnvironmentFile in gh-update-notify@.service).
+# Sends a Mailgun email.
+#
+#   gh-notify.sh <subject>   body read from stdin; used by gh-update.sh, which
+#                            reports its own results
+#   gh-notify.sh --abrupt    backstop for gh-update.service dying without
+#                            getting to report — driven by systemd's $MONITOR_*
+#                            variables, wired up as OnFailure=
+#
+# Expects MAILGUN_API_KEY, MAILGUN_DOMAIN and NOTIFY_EMAIL in the environment:
+# exported by gh-update.sh, or via EnvironmentFile= in gh-update-abort.service.
 
 set -euo pipefail
 
@@ -11,79 +17,46 @@ cd "$(dirname "$0")"
 
 host="$(hostname)"
 
-# Read the outcome of the invocation that triggered us, not whatever is in
-# run/result by now: systemd releases any queued next run at the same moment it
-# starts us, and that run would otherwise overwrite the outcome before we get
-# to it. $MONITOR_INVOCATION_ID is set for OnSuccess=/OnFailure= units.
-run_id="${MONITOR_INVOCATION_ID:-}"
-if [ -n "$run_id" ] && [ -f "run/result.${run_id}" ]; then
-  result="$(cat "run/result.${run_id}")"
-  reason="$(cat "run/error.${run_id}" 2>/dev/null || true)"
-  rm -f "run/result.${run_id}" "run/error.${run_id}"
-else
-  if [ -n "${MONITOR_UNIT:-}" ]; then
-    echo "warning: no state for invocation '${run_id}', falling back to run/result;" \
-         "the outcome reported below may belong to a later run" >&2
-  fi
-  result="$(cat run/result 2>/dev/null || true)"
-  reason="$(cat run/last-error 2>/dev/null || true)"
-fi
-[ -n "$reason" ] || reason="(no message recorded — see the journal)"
-
 case "${1:-}" in
-  success)
-    if [ "$result" != "updated" ]; then
-      exit 0  # no update was performed; skip email
-    fi
-    subject="GraphHopper update succeeded on ${host}"
-    body="GraphHopper OSM data was updated successfully on ${host} at $(date)."
-    ;;
-  failure)
-    # gh-update.sh writes "retry" only on the recoverable path. Anything else,
-    # including a run that died before it could classify itself, is a hard
-    # failure — the safe way round to be wrong.
-    if systemctl is-active --quiet gh-update.timer; then
-      timer_state="The hourly timer is still armed."
-    else
-      timer_state="The hourly timer has been STOPPED — no further updates will
-run until it is re-armed (note it comes back by itself after a reboot)."
+  --abrupt)
+    # gh-update.sh mails its own failures, so anything that exited under its
+    # own control has already been reported. Only deaths it could not handle —
+    # OOM kill, SIGKILL, watchdog — are ours to announce.
+    if [ "${MONITOR_SERVICE_RESULT:-}" = "exit-code" ]; then
+      echo "gh-update.service exited with a status; it reported for itself"
+      exit 0
     fi
 
-    if [ "$result" = "retry" ]; then
-      streak="$(cat run/fail-streak 2>/dev/null || echo '?')"
-      subject="GraphHopper update still failing on ${host} (${streak} in a row)"
-      body="The GraphHopper OSM update has hit ${streak} recoverable failures in a row on
-${host}, most recently at $(date).
+    # It never reached its own halt(), and an import killed once will likely be
+    # killed again, so stop the schedule from here.
+    { echo "Halted $(date -Is)"
+      echo "Reason: ${MONITOR_UNIT:-gh-update.service} died (${MONITOR_SERVICE_RESULT:-unknown})"
+      echo "To resume: rm $(pwd)/run/halted"
+    } > run/halted
 
-Last error:
-  ${reason}
+    subject="GraphHopper update DIED on ${host}"
+    body="${MONITOR_UNIT:-gh-update.service} terminated without reporting a result on ${host}
+at $(date).
 
-This looks like network/mirror trouble, which usually clears on its own.
-${timer_state}
+  result: ${MONITOR_SERVICE_RESULT:-unknown}
+  code:   ${MONITOR_EXIT_CODE:-unknown}
+  status: ${MONITOR_EXIT_STATUS:-unknown}
+
+An out-of-memory kill during the import is the usual cause. Updates are HALTED
+and the next runs will exit immediately. After fixing it:
+  rm $(pwd)/run/halted
 
 Check the log for details:
   journalctl -u gh-update.service"
-    else
-      subject="GraphHopper update FAILED on ${host}"
-      body="The GraphHopper OSM update has FAILED on ${host} at $(date).
-
-Last error:
-  ${reason}
-
-${timer_state}
-
-Check the log for details:
-  journalctl -u gh-update.service
-
-To retry the update after fixing the issue:
-  systemctl reset-failed gh-update.service
-  systemctl start gh-update.timer
-  systemctl start --no-block gh-update.service"
-    fi
+    ;;
+  "" | -*)
+    echo "usage: $0 <subject>    (body on stdin)" >&2
+    echo "       $0 --abrupt" >&2
+    exit 1
     ;;
   *)
-    echo "Usage: $0 success|failure" >&2
-    exit 1
+    subject="$1"
+    body="$(cat)"
     ;;
 esac
 
@@ -93,8 +66,8 @@ for email in "${emails[@]}"; do
   to_args+=(-F "to=${email// /}")
 done
 
-# --fail-with-body so a rejected send shows up as a failed notify unit instead
-# of silently succeeding; retry a couple of times for transient Mailgun errors.
+# --fail-with-body so a rejected send shows up as a failure instead of silently
+# succeeding; retry a couple of times for transient Mailgun errors.
 curl -sS --fail-with-body --retry 3 --retry-connrefused --max-time 60 \
   --user "api:${MAILGUN_API_KEY}" \
   "https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages" \

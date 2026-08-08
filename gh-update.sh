@@ -2,15 +2,7 @@
 
 set -euo pipefail
 
-# Exit code for recoverable problems (mirror 5xx, timeouts, truncated
-# download). The EXIT trap leaves the hourly timer armed for these, so the next
-# run just tries again. Any other non-zero exit is a hard failure: the timer is
-# stopped so a broken state doesn't keep retrying until someone intervenes
-# (re-arm with `systemctl start gh-update.timer`).
-readonly EX_TEMPFAIL=75
-
-# Recoverable failures stay silent (no email) until this many have happened in
-# a row; then a notification is sent on every Nth consecutive one. Geofabrik
+# Consecutive recoverable failures before one is worth an email. Geofabrik
 # hiccups usually clear within an hour or two — a whole day of them does not.
 readonly NOTIFY_AFTER_FAILURES=6
 
@@ -25,20 +17,107 @@ readonly WGET_RETRY_OPTS=(
   --retry-on-http-error=408,429,500,502,503,504
 )
 
+cd "$(dirname "$0")"
+
+mkdir -p run
+
 echo "---BEGIN---"
+
+# Exported so gh-notify.sh inherits MAILGUN_* and NOTIFY_EMAIL.
+# shellcheck source=gh-update.conf
+set -a
+source ./gh-update.conf
+set +a
+
+host="$(hostname)"
+
+# This run sends its own mail, from the point of failure, where the reason is
+# still in a variable. Nothing is handed to another process through the
+# filesystem — that is what used to lose notifications, when the next run
+# overwrote the outcome before the mailer had read it.
+reported=0
+
+notify() { # subject in $1, body on stdin
+  ./gh-notify.sh "$1" || echo "WARNING: could not send notification: $1" >&2
+}
+
+# Stop the schedule until a human has looked. A marker file rather than
+# stopping the timer: it needs no privileges and, unlike a stopped timer unit,
+# it survives a reboot.
+halt() {
+  { echo "Halted $(date -Is)"
+    echo "Reason: $*"
+    echo "To resume: rm $(pwd)/run/halted"
+  } > run/halted
+}
+
+# Unrecoverable: halt the schedule and say so.
+hard_fail() {
+  echo "$*" >&2
+  halt "$*"
+  notify "GraphHopper update FAILED on ${host}" <<EOF
+The GraphHopper OSM update has FAILED on ${host} at $(date).
+
+  $*
+
+Updates are HALTED and the next runs will exit immediately. After fixing it:
+  rm $(pwd)/run/halted
+
+Check the log for details:
+  journalctl -u gh-update.service
+EOF
+  reported=1
+  exit 1
+}
+
+# Recoverable: leave the schedule alone and let the next run try again. Stays
+# quiet unless the same thing keeps happening.
+soft_fail() {
+  local streak
+  streak="$(cat run/fail-streak 2>/dev/null || true)"
+  [[ "$streak" =~ ^[0-9]+$ ]] || streak=0
+  streak=$((streak + 1))
+  echo "$streak" > run/fail-streak
+
+  echo "$*" >&2
+  echo "Recoverable failure #${streak} — the next run will retry"
+
+  if [ $((streak % NOTIFY_AFTER_FAILURES)) -eq 0 ]; then
+    notify "GraphHopper update still failing on ${host} (${streak} in a row)" <<EOF
+The GraphHopper OSM update has hit ${streak} recoverable failures in a row on
+${host}, most recently at $(date).
+
+  $*
+
+This looks like network/mirror trouble, which usually clears on its own. The
+schedule is untouched and the next run will try again. No action needed unless
+this keeps arriving.
+
+Check the log for details:
+  journalctl -u gh-update.service
+EOF
+  fi
+
+  reported=1
+  exit 0
+}
 
 on_exit() {
   local rc=$?
-  if [ "$rc" -ne 0 ] && [ "$rc" -ne "$EX_TEMPFAIL" ]; then
-    echo "Hard failure (exit $rc) — stopping the hourly timer"
-    if ! sudo -n /bin/systemctl stop gh-update.timer; then
-      # Don't let this pass silently: the whole point of the hard-failure path
-      # is that a broken state stops re-running every hour.
-      local warning="WARNING: could not stop gh-update.timer — it will keep retrying hourly"
-      echo "$warning" >&2
-      echo "$warning" >> "${error_file:-/dev/null}" 2>/dev/null || true
-      echo "$warning" >> run/last-error 2>/dev/null || true
-    fi
+  # A death that got past hard_fail/soft_fail — set -e tripping somewhere with
+  # no message of its own. Report it rather than let it vanish.
+  if [ "$rc" -ne 0 ] && [ "$reported" -eq 0 ]; then
+    halt "exited unexpectedly with status $rc"
+    notify "GraphHopper update FAILED on ${host}" <<EOF
+The GraphHopper OSM update on ${host} exited unexpectedly with status ${rc} at
+$(date), without reporting a reason.
+
+Updates are HALTED and the next runs will exit immediately. After fixing it:
+  rm $(pwd)/run/halted
+
+Check the log for details:
+  journalctl -u gh-update.service
+EOF
   fi
   echo "---END---"
 }
@@ -46,94 +125,11 @@ on_exit() {
 # gh-update.service while a previous run is still active.
 trap on_exit EXIT
 
-cd "$(dirname "$0")"
-
-mkdir -p run
-
-# Where this run reports its outcome to gh-notify.sh.
-#
-# It has to be keyed on the invocation, not a fixed name: when the timer fires
-# while a run is busy — which any import longer than an hour guarantees —
-# systemd leaves a start job queued and releases it the instant this run exits,
-# concurrently with the OnSuccess=/OnFailure= mailer. A shared run/result is
-# overwritten by that next run before the mailer can read it, and the
-# notification is silently lost. systemd hands the mailer this same ID in
-# $MONITOR_INVOCATION_ID.
-run_id="${INVOCATION_ID:-manual}"
-result_file="run/result.${run_id}"
-error_file="run/error.${run_id}"
-
-# Backstop only: every invocation's files are consumed by its mailer, since
-# OnSuccess= and OnFailure= between them cover every way a run can end.
-find run -maxdepth 1 -type f \( -name 'result.*' -o -name 'error.*' \) \
-  -mtime +7 -delete 2>/dev/null || true
-
-# The unsuffixed copies exist so the last outcome can be read by hand; the
-# mailer prefers the per-invocation ones. Note the startup default below is
-# written *only* to this run's private file, so that a finishing run's outcome
-# outlives the start of the next one.
-record_result() {
-  echo "$1" > "$result_file"
-  echo "$1" > run/result
-}
-
-record_error() {
-  echo "$*" > "$error_file"
-  echo "$*" > run/last-error
-}
-
-echo "skipped" > "$result_file"
-
-# Never let a previous run's message end up in this run's failure email.
-rm -f "$error_file" run/last-error
-
-clear_failure_state() {
-  echo 0 > run/fail-streak
-  rm -f "$error_file" run/last-error
-}
-
-# Unrecoverable: report, stop the timer (via the EXIT trap), email.
-hard_fail() {
-  echo "$*" >&2
-  record_error "$*"
-  record_result failed
-  exit 1
-}
-
-# Recoverable: report and get out, leaving the timer armed for the next hour.
-# Exits 0 (silent) unless the same thing keeps happening.
-soft_fail() {
-  local streak
-  echo "$*" >&2
-  record_error "$*"
-  record_result retry
-
-  streak="$(cat run/fail-streak 2>/dev/null || true)"
-  [[ "$streak" =~ ^[0-9]+$ ]] || streak=0
-  streak=$((streak + 1))
-  echo "$streak" > run/fail-streak
-
-  echo "Recoverable failure #${streak} — timer stays armed, retrying next hour"
-  if [ $((streak % NOTIFY_AFTER_FAILURES)) -eq 0 ]; then
-    exit "$EX_TEMPFAIL"
-  fi
+if [ -f run/halted ]; then
+  echo "Halted by an earlier failure — doing nothing:"
+  cat run/halted
   exit 0
-}
-
-# wget exit 3 is a local file I/O error (no space left, bad permissions on
-# run/). Waiting an hour won't fix that, and retrying a ~35G download every
-# hour on a full disk is worse than useless, so take the hard path.
-wget_failed() {
-  local rc="$1"
-  shift
-  if [ "$rc" -eq 3 ]; then
-    hard_fail "$* (wget exit 3: local file I/O error — check free space and permissions on run/)"
-  fi
-  soft_fail "$* (wget exit $rc)"
-}
-
-# shellcheck source=gh-update.conf
-source ./gh-update.conf
+fi
 
 wait_for_gh_ready() {
   local port="$1"
@@ -165,6 +161,18 @@ stored_md5() {
   awk '{print $1}' "$1" 2>/dev/null || true
 }
 
+# wget exit 3 is a local file I/O error (no space left, bad permissions on
+# run/). Waiting an hour won't fix that, and retrying a ~35G download every
+# hour on a full disk is worse than useless, so take the hard path.
+wget_failed() {
+  local rc="$1"
+  shift
+  if [ "$rc" -eq 3 ]; then
+    hard_fail "$* (wget exit 3: local file I/O error — check free space and permissions on run/)"
+  fi
+  soft_fail "$* (wget exit $rc)"
+}
+
 # GEOFABRIK_URL is set in gh-update.conf
 pbf_file="run/$(basename "$GEOFABRIK_URL")"
 
@@ -180,8 +188,7 @@ remote_md5="${md5_line%% *}"
 # run/osm.md5 holds the full remote line; compare only the hash.
 if [ "$(stored_md5 run/osm.md5)" = "$remote_md5" ]; then
   echo "No update available"
-  record_result skipped
-  clear_failure_state
+  echo 0 > run/fail-streak
   exit 0
 fi
 
@@ -275,6 +282,12 @@ echo "$md5_line" > run/osm.md5
 sudo -n /bin/systemctl disable --now graphhopper@${active} || true
 
 rm -f "$pbf_file" run/downloaded.md5 run/extract.pbf
-clear_failure_state
-record_result updated
+echo 0 > run/fail-streak
+reported=1
+notify "GraphHopper update succeeded on ${host}" <<EOF
+GraphHopper OSM data was updated successfully on ${host} at $(date).
+
+  instance: ${active} -> ${next}
+  data:     ${md5_line}
+EOF
 echo "Success"

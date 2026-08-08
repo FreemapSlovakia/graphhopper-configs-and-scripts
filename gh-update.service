@@ -1,7 +1,8 @@
 [Unit]
 Description=GraphHopper OSM update
-OnSuccess=gh-update-notify@success.service
-OnFailure=gh-update-notify@failure.service
+# gh-update.sh emails its own results. This covers only the deaths where it
+# never got the chance to: OOM kill, SIGKILL, watchdog.
+OnFailure=gh-update-abort.service
 
 [Service]
 Type=oneshot
