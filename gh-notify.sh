@@ -10,8 +10,24 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 host="$(hostname)"
-result="$(cat run/result 2>/dev/null || true)"
-reason="$(cat run/last-error 2>/dev/null || true)"
+
+# Read the outcome of the invocation that triggered us, not whatever is in
+# run/result by now: systemd releases any queued next run at the same moment it
+# starts us, and that run would otherwise overwrite the outcome before we get
+# to it. $MONITOR_INVOCATION_ID is set for OnSuccess=/OnFailure= units.
+run_id="${MONITOR_INVOCATION_ID:-}"
+if [ -n "$run_id" ] && [ -f "run/result.${run_id}" ]; then
+  result="$(cat "run/result.${run_id}")"
+  reason="$(cat "run/error.${run_id}" 2>/dev/null || true)"
+  rm -f "run/result.${run_id}" "run/error.${run_id}"
+else
+  if [ -n "${MONITOR_UNIT:-}" ]; then
+    echo "warning: no state for invocation '${run_id}', falling back to run/result;" \
+         "the outcome reported below may belong to a later run" >&2
+  fi
+  result="$(cat run/result 2>/dev/null || true)"
+  reason="$(cat run/last-error 2>/dev/null || true)"
+fi
 [ -n "$reason" ] || reason="(no message recorded — see the journal)"
 
 case "${1:-}" in

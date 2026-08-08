@@ -34,9 +34,10 @@ on_exit() {
     if ! sudo -n /bin/systemctl stop gh-update.timer; then
       # Don't let this pass silently: the whole point of the hard-failure path
       # is that a broken state stops re-running every hour.
-      echo "WARNING: could not stop gh-update.timer — it will keep retrying hourly" >&2
-      echo "WARNING: could not stop gh-update.timer — it will keep retrying hourly" \
-        >> run/last-error 2>/dev/null || true
+      local warning="WARNING: could not stop gh-update.timer — it will keep retrying hourly"
+      echo "$warning" >&2
+      echo "$warning" >> "${error_file:-/dev/null}" 2>/dev/null || true
+      echo "$warning" >> run/last-error 2>/dev/null || true
     fi
   fi
   echo "---END---"
@@ -49,23 +50,53 @@ cd "$(dirname "$0")"
 
 mkdir -p run
 
-# run/result is read by gh-notify.sh to suppress the success email when there
-# was nothing to do. Default it here; only a completed update sets "updated".
-echo "skipped" > run/result
+# Where this run reports its outcome to gh-notify.sh.
+#
+# It has to be keyed on the invocation, not a fixed name: when the timer fires
+# while a run is busy — which any import longer than an hour guarantees —
+# systemd leaves a start job queued and releases it the instant this run exits,
+# concurrently with the OnSuccess=/OnFailure= mailer. A shared run/result is
+# overwritten by that next run before the mailer can read it, and the
+# notification is silently lost. systemd hands the mailer this same ID in
+# $MONITOR_INVOCATION_ID.
+run_id="${INVOCATION_ID:-manual}"
+result_file="run/result.${run_id}"
+error_file="run/error.${run_id}"
+
+# Backstop only: every invocation's files are consumed by its mailer, since
+# OnSuccess= and OnFailure= between them cover every way a run can end.
+find run -maxdepth 1 -type f \( -name 'result.*' -o -name 'error.*' \) \
+  -mtime +7 -delete 2>/dev/null || true
+
+# The unsuffixed copies exist so the last outcome can be read by hand; the
+# mailer prefers the per-invocation ones. Note the startup default below is
+# written *only* to this run's private file, so that a finishing run's outcome
+# outlives the start of the next one.
+record_result() {
+  echo "$1" > "$result_file"
+  echo "$1" > run/result
+}
+
+record_error() {
+  echo "$*" > "$error_file"
+  echo "$*" > run/last-error
+}
+
+echo "skipped" > "$result_file"
 
 # Never let a previous run's message end up in this run's failure email.
-rm -f run/last-error
+rm -f "$error_file" run/last-error
 
 clear_failure_state() {
   echo 0 > run/fail-streak
-  rm -f run/last-error
+  rm -f "$error_file" run/last-error
 }
 
 # Unrecoverable: report, stop the timer (via the EXIT trap), email.
 hard_fail() {
   echo "$*" >&2
-  echo "$*" > run/last-error
-  echo "failed" > run/result
+  record_error "$*"
+  record_result failed
   exit 1
 }
 
@@ -74,8 +105,8 @@ hard_fail() {
 soft_fail() {
   local streak
   echo "$*" >&2
-  echo "$*" > run/last-error
-  echo "retry" > run/result
+  record_error "$*"
+  record_result retry
 
   streak="$(cat run/fail-streak 2>/dev/null || true)"
   [[ "$streak" =~ ^[0-9]+$ ]] || streak=0
@@ -149,6 +180,7 @@ remote_md5="${md5_line%% *}"
 # run/osm.md5 holds the full remote line; compare only the hash.
 if [ "$(stored_md5 run/osm.md5)" = "$remote_md5" ]; then
   echo "No update available"
+  record_result skipped
   clear_failure_state
   exit 0
 fi
@@ -244,5 +276,5 @@ sudo -n /bin/systemctl disable --now graphhopper@${active} || true
 
 rm -f "$pbf_file" run/downloaded.md5 run/extract.pbf
 clear_failure_state
-echo "updated" > run/result
+record_result updated
 echo "Success"

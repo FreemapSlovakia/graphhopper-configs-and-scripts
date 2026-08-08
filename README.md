@@ -15,9 +15,19 @@ State kept between runs in `run/`:
 | `downloading.md5` | Checksum the partially downloaded `.pbf` is expected to have    |
 | `downloaded.md5`  | Checksum of a fully downloaded and verified `.pbf`              |
 | `mismatch.md5`    | Checksum that already failed verification once                  |
-| `result`          | `updated` / `skipped` / `retry` / `failed` — read by the mailer |
+| `result.<id>`     | Outcome of one run: `updated` / `skipped` / `retry` / `failed`  |
+| `error.<id>`      | Failure message of one run, quoted in the email                 |
+| `result`          | Copy of the last outcome, for reading by hand                   |
+| `last-error`      | Copy of the last failure message, for reading by hand           |
 | `fail-streak`     | Consecutive recoverable failures                                |
-| `last-error`      | Message of the most recent failure, quoted in the email         |
+
+`<id>` is the systemd invocation ID of the run. The mailer is handed the same
+ID in `$MONITOR_INVOCATION_ID` and reads — and then deletes — that run's pair of
+files. This is not incidental: when the timer fires while a run is busy, which
+any import longer than an hour guarantees, systemd releases the queued next run
+at the same instant it starts the mailer. A single shared `run/result` gets
+overwritten by that next run before the mailer can read it, and the
+notification is silently lost.
 
 ## Systemd Units
 
@@ -68,9 +78,9 @@ them hourly costs more than it can ever gain:
   is retried once; a second one means the mirror or the disk is broken, not
   unlucky, and a ~35 GB re-download per hour is not a reasonable way to find out.
 
-`gh-notify.sh` decides which email to send from `run/result`, treating anything
-other than `retry` as hard — including a run that died before it could classify
-itself.
+`gh-notify.sh` decides which email to send from the triggering run's
+`run/result.<id>`, treating anything other than `retry` as hard — including a
+run that died before it could classify itself.
 
 **Caveat:** stopping the timer only lasts until the next reboot. The unit stays
 `enabled`, so it is re-armed at boot and, with `Persistent=true`, fires straight
