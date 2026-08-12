@@ -83,19 +83,54 @@ truncated or HTML-error-page downloads easy to spot:
 find /fm/data4/graphhopper-data/sonny-dem -name '*.hgt' ! -size 25934402c
 ```
 
-## Coverage gaps fail quietly
+## A missing tile kills the import
 
-If a tile is missing for a coordinate inside the routed area, GraphHopper tries
-its placeholder download URL, fails, and treats the whole 1° cell as **sea
-level — elevation 0** — logging only
+This is the sharp edge. If a coordinate in the routed area falls in a 1° cell
+with no tile, the provider tries to download it from the placeholder Google
+Drive URL, which answers **HTTP 400 with an HTML body**. Java only raises
+`FileNotFoundException` for 404/410, so a 400 surfaces as a plain `IOException`;
+`downloadToFile` catches only `SocketTimeoutException` and
+`FileNotFoundException`, so it reaches `updateHeightsFromFile`'s
+`catch (Exception) → throw new RuntimeException(...)` and escapes `getEle`,
+which guards only `FileNotFoundException`.
 
+The import therefore **dies** on the first node in an uncovered cell —
+`gh-update.sh` turns that into a hard failure and halts the schedule. It does
+not degrade to flat terrain. (`SonnyProvider.main()` shows the author expected
+this: its out-of-area probe is wrapped in `try/catch`.)
+
+Two ways out:
+
+- **`multi3`** — cgiar + gmted + sonny. It catches exactly that exception and
+  falls back, which is why upstream recommends it for partial coverage. The cost
+  is that CGIAR and GMTED then download tiles mid-import, and multi3 calls them
+  outside any try, so their own failures are fatal instead.
+- **Fill the gaps by hand**, which is what we do. Any `.hgt` in the cache
+  directory works regardless of resolution — the tile width is derived from the
+  file length (`width = sqrt(header)`), so a 3" SRTM tile (1201×1201,
+  2884802 bytes) sits happily beside Sonny's 1" tiles (3601×3601, 25934402
+  bytes) and simply gives that cell SRTM-grade elevation.
+
+The old `srtmprovider/` cache is the gap list: `SRTMProvider` only ever
+downloaded cells the extract actually touched, so `srtm-only minus sonny` is
+precisely the set that would crash. **Do not delete `srtmprovider/`** — it is
+the source for this.
+
+```bash
+cd /fm/data4/graphhopper-data/srtmprovider
+comm -23 <(ls *.hgt.zip | sed 's/\.hgt\.zip//' | sort) \
+         <(cd ../sonny-dem && ls *.hgt | sed 's/\.hgt//' | sort) \
+  | while read t; do unzip -n -q -j "$t.hgt.zip" -d ../sonny-dem; done
 ```
-File not found dem<key> for the coordinates <lat>,<lon>
-```
 
-The import succeeds and nothing else complains, so a missing tile shows up as a
-region of flat routing rather than as an error. After the first import with new
-tiles, grep the import log for `File not found` before trusting the result.
+As of the first Sonny import that filled 342 cells — 109 east of Sonny's 34°E
+edge (eastern Turkey, the Caucasus) and 233 across North Africa and the southern
+Mediterranean — giving 1398 tiles in total.
+
+Residual risk: a future OSM update could add ways in a cell that neither set
+covers. That import fails hard with `There was an issue with dem<key> looking up
+the coordinates <lat>,<lon>` — the message names the coordinates, so re-run the
+`comm` above, or drop in any `.hgt` for that cell, and restart.
 
 Sonny covers Europe only, but generously: the folder starts at N27 and includes
 the Canaries, Madeira, the Azores, Malta, Cyprus and the North African coastal
