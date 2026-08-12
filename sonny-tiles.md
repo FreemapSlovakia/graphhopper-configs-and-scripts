@@ -76,12 +76,17 @@ for z in *.zip; do
 done
 ```
 
-A complete 1" tile is exactly 3601 × 3601 int16 = 25934402 bytes, which makes
-truncated or HTML-error-page downloads easy to spot:
+Tile size is a complete integrity check, since an `.hgt` is a bare grid of
+int16 with no header: 3601 × 3601 = **25934402 bytes** for Sonny's 1" tiles and
+1201 × 1201 = **2884802 bytes** for the 3" SRTM tiles filling the gaps. Anything
+else is a truncated download or an HTML error page:
 
 ```bash
-find /fm/data4/graphhopper-data/sonny-dem -name '*.hgt' ! -size 25934402c
+find /fm/data4/graphhopper-data/sonny-dem -name '*.hgt' \
+  ! -size 25934402c ! -size 2884802c
 ```
+
+The zips are not kept once unpacked — `rclone` re-fetches them in minutes.
 
 ## A missing tile kills the import
 
@@ -132,13 +137,10 @@ covers. That import fails hard with `There was an issue with dem<key> looking up
 the coordinates <lat>,<lon>` — the message names the coordinates, so re-run the
 `comm` above, or drop in any `.hgt` for that cell, and restart.
 
-Sonny covers Europe only, but generously: the folder starts at N27 and includes
-the Canaries, Madeira, the Azores, Malta, Cyprus and the North African coastal
-fringe, which covers most of what `limit.geojson` (lon −34.3…+46.9,
-lat 29.0…71.4) reaches. Check the edges of the routed area after the first
-import. If something out there ends up flat, the fix is GraphHopper's `multi3`
-provider, which combines cgiar + gmted + sonny and falls back outside Sonny's
-coverage.
+For reference, the shipped tiles span lat 27…80 and lon −32…34 — generous
+westward (the Canaries, Madeira, the Azores) but stopping hard at 34°E, while
+`limit.geojson` reaches lon 46.9 and lat 29.0. That eastern edge, plus North
+Africa, is exactly where the 342 filled cells lie.
 
 ## Changing elevation requires a full re-import
 
