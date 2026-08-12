@@ -65,7 +65,7 @@ caps folder downloads at 50 files, so use `rclone` with a Drive remote — the
 old-style share needs both the folder id and the resource key:
 
 ```bash
-rclone copy gdrive: /fm/data4/graphhopper-data/sonny-zips \
+rclone copy gDrive: /fm/data4/graphhopper-data/sonny-zips \
   --drive-root-folder-id 0BxphPoRgwhnoWkRoTFhMbTM3RDA \
   --drive-resource-key 0-wRe5bWl96pwvQ9tAfI9cQg \
   --include '*.zip' --transfers 8 --checkers 16 --progress
