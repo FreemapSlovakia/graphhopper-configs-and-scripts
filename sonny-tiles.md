@@ -116,10 +116,17 @@ Two ways out:
   2884802 bytes) sits happily beside Sonny's 1" tiles (3601×3601, 25934402
   bytes) and simply gives that cell SRTM-grade elevation.
 
-The old `srtmprovider/` cache is the gap list: `SRTMProvider` only ever
-downloaded cells the extract actually touched, so `srtm-only minus sonny` is
-precisely the set that would crash. **Do not delete `srtmprovider/`** — it is
-the source for this.
+The old `srtmprovider/` cache is most of the gap list: `SRTMProvider` only ever
+downloaded cells the extract actually touched, so `srtm-only minus sonny` is a
+ready-made set of cells that would otherwise crash. **Do not delete
+`srtmprovider/`** — it is the source for this.
+
+It is **not** a complete list, though, and trusting it as one cost us an import.
+`SRTMProvider` has `MAX_LAT = 60` and returns 0 above it without ever fetching a
+tile, so the cache holds nothing north of 60°N — the first Sonny import died in
+Scotland/Norway on a cell no SRTM tile existed for. (The flip side: every
+pre-Sonny graph had elevation 0 above 60°N, so Sonny's Scandinavian coverage is
+a straight improvement.)
 
 ```bash
 cd /fm/data4/graphhopper-data/srtmprovider
@@ -132,10 +139,34 @@ As of the first Sonny import that filled 342 cells — 109 east of Sonny's 34°E
 edge (eastern Turkey, the Caucasus) and 233 across North Africa and the southern
 Mediterranean — giving 1398 tiles in total.
 
-Residual risk: a future OSM update could add ways in a cell that neither set
-covers. That import fails hard with `There was an issue with dem<key> looking up
-the coordinates <lat>,<lon>` — the message names the coordinates, so re-run the
-`comm` above, or drop in any `.hgt` for that cell, and restart.
+### Placeholders as the safety net
+
+Because no list of "cells the extract touches" can be trusted in advance — the
+next OSM update may add ways anywhere — every remaining cell gets a **sparse,
+zero-filled tile**, which reads back as elevation 0. That is exactly what SRTM
+gave above 60°N for years, so it is never a regression, and it converts a fatal
+import from an uncovered cell into flat terrain there:
+
+```bash
+cd /fm/data4/graphhopper-data/sonny-dem
+while read t; do [ -f "$t.hgt" ] || truncate -s 2884802 "$t.hgt"; done < PLACEHOLDERS.txt
+```
+
+`PLACEHOLDERS.txt` lists them (2461 cells, the polygon padded by 1° because
+`osmium` keeps complete ways whose nodes can fall outside it). `truncate` makes
+the files sparse, so 7 GB apparent costs nothing on disk — and allocated blocks
+tell the two apart later:
+
+```bash
+find . -name '*.hgt' -printf '%b %p\n' | awk '$1==0'   # placeholders
+```
+
+To replace a placeholder with real data, just write a genuine `.hgt` over it —
+viewfinderpanoramas.org covers the far north that Sonny and SRTM both miss, and
+any tile size works.
+
+Regenerate the list whenever `limit.geojson` changes, since cells outside the
+old polygon will have neither a tile nor a placeholder.
 
 For reference, the shipped tiles span lat 27…80 and lon −32…34 — generous
 westward (the Canaries, Madeira, the Azores) but stopping hard at 34°E, while
