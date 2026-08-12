@@ -123,11 +123,17 @@ graphhopper:
 
   #### Elevation ####
 
-  # To populate your graph with elevation data use SRTM, default is noop (no elevation). Read more about it in docs/core/elevation.md
-  graph.elevation.provider: srtm
+  # Sonny's LiDAR DTM, 1" (~30 m) tiles for Europe — far better than SRTM in the
+  # mountains. GraphHopper cannot download these; the .hgt tiles are put in the
+  # cache dir by hand. See sonny-tiles.md.
+  graph.elevation.provider: sonny
 
-  # default location for cache is /tmp/srtm
-  graph.elevation.cache_dir: ./srtmprovider/
+  # Deliberately outside graph-cache.{a,b}: gh-update.sh wipes the graph dir of
+  # the instance it rebuilds, and the ~4.8 GB of tiles must survive that. Shared
+  # by both instances (only the import reads it, and imports never overlap).
+  # Must be writable: GraphHopper keeps its decoded `dem*` cache next to the
+  # tiles. Default would be /tmp/sonny.
+  graph.elevation.cache_dir: ./sonny-dem/
 
   # If you have a slow disk or plenty of RAM change the default MMAP to:
   # graph.elevation.dataaccess: RAM_STORE
@@ -144,14 +150,15 @@ graphhopper:
   # window size in meter along a way used for averaging a node's elevation
   # graph.elevation.edge_smoothing.moving_average.window_size: 150
 
-  # To increase elevation profile resolution, use the following two parameters to tune the extra resolution you need
-  # against the additional storage space used for edge geometries. You should enable bilinear interpolation when using
-  # these features (see #1953 for details).
+  # Long edge sampling is deliberately left off. Our elevation-aware profiles
+  # weight on `average_slope`, which GraphHopper computes from the two tower
+  # nodes of an edge and its length, so extra sampled pillar nodes do not change
+  # it. They would only cost graph size.
   # - first, set the distance (in meters) at which elevation samples should be taken on long edges
-  graph.elevation.long_edge_sampling_distance: 60
+  # graph.elevation.long_edge_sampling_distance: 60
   # - second, set the elevation tolerance (in meters) to use when simplifying polylines since the default ignores
   #   elevation and will remove the extra points that long edge sampling added
-  graph.elevation.way_point_max_distance: 10
+  # graph.elevation.way_point_max_distance: 10
 
   #### Country-dependent defaults for max speeds ####
 

@@ -50,6 +50,18 @@ fires on `OnFailure=` but stays quiet whenever `$MONITOR_SERVICE_RESULT` is
 7. Switches nginx to the new instance and stops the old one.
 8. Emails the result.
 
+## Elevation
+
+Elevation comes from Sonny's LiDAR DTM (1", Europe), not SRTM. The tiles are
+downloaded by hand into `sonny-dem/` — GraphHopper cannot fetch them — and the
+data is CC BY 4.0, so **freemap.sk has to credit Sonny with a link to
+sonny.4lima.de** in its map/routing attribution (that credit lives in
+`freemap-v3-react`).
+
+See [sonny-tiles.md](sonny-tiles.md) for where the tiles come from, how the
+cache directory has to look, how missing tiles fail silently, and the
+GraphHopper version this provider needs.
+
 ## Failure Handling
 
 Failures are split into two kinds, because the mirror being briefly unreachable
@@ -91,7 +103,12 @@ chmod 600 gh-update.conf
 # fill in MAILGUN_API_KEY, MAILGUN_DOMAIN, NOTIFY_EMAIL
 ```
 
-### 2. Sudoers
+### 2. Elevation tiles
+
+Install Sonny's DTM tiles into `sonny-dem/` before the first import — see
+[sonny-tiles.md](sonny-tiles.md). Without them every route comes out flat.
+
+### 3. Sudoers
 
 ```
 freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
@@ -99,7 +116,7 @@ freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
   /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b
 ```
 
-### 3. Install and enable units
+### 4. Install and enable units
 
 ```bash
 cp graphhopper@.service gh-update.service gh-update.timer gh-update-abort.service \
