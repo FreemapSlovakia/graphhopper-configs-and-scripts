@@ -58,9 +58,59 @@ data is CC BY 4.0, so **freemap.sk has to credit Sonny with a link to
 sonny.4lima.de** in its map/routing attribution (that credit lives in
 `freemap-v3-react`).
 
+Sonny only covers Europe, and a cell with no tile does **not** degrade to flat
+terrain — it fails the import outright. The gaps our extract reaches (eastern
+Turkey, the Caucasus, North Africa) are filled with 3" tiles from the old
+`srtmprovider/` cache, so **that directory must be kept**.
+
 See [sonny-tiles.md](sonny-tiles.md) for where the tiles come from, how the
-cache directory has to look, how missing tiles fail silently, and the
-GraphHopper version this provider needs.
+cache directory has to look, why an uncovered cell is fatal, and how to fill new
+gaps.
+
+`sonny` is in no GraphHopper release, so the deployed jar is a local build —
+see [Building the jar](#building-the-jar).
+
+## Building the jar
+
+`graphhopper-web-11.0.jar` is **not** the official release jar. The `sonny`
+elevation provider was added in
+[#3183](https://github.com/graphhopper/graphhopper/pull/3183) on 2025-11-12,
+four weeks after 11.0 was tagged, and is still unreleased — as of 2026-08, 11.0
+remains the newest release and the commit exists only on `master`
+(`12.0-SNAPSHOT`). The stock jar aborts the import with
+`IllegalArgumentException: Did not find elevation provider: sonny`.
+
+Rather than run `12.0-SNAPSHOT` — ten months of unreleased changes, including
+`CustomWeighting` returning 10× its previous values and country rules moving
+into parsers — the release is used with that one commit cherry-picked. It
+applies cleanly: 11.0 already has the `AbstractSRTMElevationProvider`
+constructor it builds on, and the PR only adds two self-contained classes plus
+four lines of dispatch in `GraphHopper.java`.
+
+```bash
+git clone https://github.com/graphhopper/graphhopper.git
+cd graphhopper
+git checkout -b 11.0-sonny 11.0
+git cherry-pick 25903cd0c6cfd23e1e72da71900b26dc2cfc362f    # #3183
+mvn -DskipTests -pl web -am package
+unzip -l web/target/graphhopper-web-11.0-SNAPSHOT.jar | grep SonnyProvider   # sanity check
+```
+
+The tag's pom says `11.0-SNAPSHOT`, so the artifact has to be renamed to
+`graphhopper-web-11.0.jar` — both `graphhopper@.service` and `gh-update.sh`
+hardcode that name.
+
+Install it by **rename, not in place**: a running instance holds the jar open,
+and truncating it under the JVM breaks lazy class loading.
+
+```bash
+sudo install -o freemap -g freemap -m 644 new.jar /opt/graphhopper/.gh-new.jar
+sudo mv -f /opt/graphhopper/.gh-new.jar /opt/graphhopper/graphhopper-web-11.0.jar
+```
+
+The new jar takes effect at the next instance start, which the update script
+does as part of its normal switchover. Once a release finally contains #3183
+this section goes away — but read the 12.0 migration notes before jumping.
 
 ## Failure Handling
 
@@ -103,12 +153,19 @@ chmod 600 gh-update.conf
 # fill in MAILGUN_API_KEY, MAILGUN_DOMAIN, NOTIFY_EMAIL
 ```
 
-### 2. Elevation tiles
+### 2. GraphHopper jar
+
+Build it — the official release has no `sonny` provider. See
+[Building the jar](#building-the-jar). The result belongs in this directory as
+`graphhopper-web-11.0.jar` (gitignored).
+
+### 3. Elevation tiles
 
 Install Sonny's DTM tiles into `sonny-dem/` before the first import — see
-[sonny-tiles.md](sonny-tiles.md). Without them every route comes out flat.
+[sonny-tiles.md](sonny-tiles.md). Without them the import fails on the first
+node it cannot find a tile for.
 
-### 3. Sudoers
+### 4. Sudoers
 
 ```
 freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
@@ -116,7 +173,7 @@ freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
   /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b
 ```
 
-### 4. Install and enable units
+### 5. Install and enable units
 
 ```bash
 cp graphhopper@.service gh-update.service gh-update.timer gh-update-abort.service \
