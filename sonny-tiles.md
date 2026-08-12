@@ -33,8 +33,12 @@ Files go **directly in that directory, unzipped, no subdirectories**, named
 `N49E019.hgt`, `N48E017.hgt`, … Case matters on Linux: uppercase `N`/`S`/`E`/`W`
 and the `.hgt` extension exactly as shipped. The directory must be **writable**
 by the `freemap` user — GraphHopper stores its decoded `dem*` tile cache there
-alongside the `.hgt` files (it is kept between imports on purpose, since
-rebuilding it is slow).
+alongside the `.hgt` files. That cache roughly doubles the size of the
+directory, and `graph.elevation.clear: false` in the configs keeps it between
+imports; GraphHopper 11 would otherwise delete it on exit and re-decode every
+tile on the next run. Only the `dem*` files are ever removed by that mechanism —
+`GHDirectory.clear()` touches nothing it did not create, so the `.hgt` tiles are
+never at risk.
 
 On fm5 the bulk data lives on `/fm/data4` and is symlinked into
 `/opt/graphhopper`, the same as `graph-cache.{a,b}` and the old `srtmprovider`:

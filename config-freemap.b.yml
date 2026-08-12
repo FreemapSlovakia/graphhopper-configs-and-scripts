@@ -135,6 +135,11 @@ graphhopper:
   # tiles. Default would be /tmp/sonny.
   graph.elevation.cache_dir: ./sonny-dem/
 
+  # 11.0 defaults this to true, which deletes the decoded `dem*` tile cache when
+  # the import finishes, so the next import re-decodes all 1056 tiles again.
+  # Upstream made false the default in 12.0 for exactly this reason.
+  graph.elevation.clear: false
+
   # If you have a slow disk or plenty of RAM change the default MMAP to:
   # graph.elevation.dataaccess: RAM_STORE
 
