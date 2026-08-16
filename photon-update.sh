@@ -78,12 +78,14 @@ data_dir="$(readlink -f "photon-data.${next}")"
   || hard_fail "Could not clear the Photon data dir at $data_dir"
 
 # The dump is decompressed into the importer rather than onto disk: it expands
-# several-fold and nothing else needs the plain JSONL. set -e is lifted so both
-# ends of the pipe can be inspected — a zstd failure means the download rotted
+# several-fold and nothing else needs the plain JSONL. No `nice` here: the unit
+# already sets Nice=10 for the whole cgroup, and nice(1) is relative, so
+# wrapping it again would put the import at 20 while GraphHopper's runs at 10.
+# set -e is lifted so both ends of the pipe can be inspected — a zstd failure means the download rotted
 # and is worth re-fetching, a java failure does not.
 set +e
 zstd --stdout -d "$dump_file" \
-  | nice -n 10 java "-Xmx${PHOTON_IMPORT_HEAP}" -jar "$PHOTON_JAR" import \
+  | java "-Xmx${PHOTON_IMPORT_HEAP}" -jar "$PHOTON_JAR" import \
       -import-file - \
       -data-dir "$data_dir" \
       -languages "$PHOTON_LANGUAGES"
