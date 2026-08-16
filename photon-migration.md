@@ -68,10 +68,14 @@ Both point at 2322, so this reload changes nothing that a client can see.
 
 The live index stays exactly where it is; side `a` just points at it.
 
+`/fm/data4` is `755 root:root`, so the new directory has to be made by root and
+handed over — `install -d` does both, matching the `2775 freemap:freemap` on the
+existing one.
+
 ```bash
-sudo -u freemap ln -s /fm/data4/photon   /opt/photon/photon-data.a
-sudo -u freemap mkdir -p /fm/data4/photon-b
-sudo -u freemap ln -s /fm/data4/photon-b /opt/photon/photon-data.b
+sudo -u freemap ln -sfn /fm/data4/photon /opt/photon/photon-data.a
+sudo install -d -o freemap -g freemap -m 2775 /fm/data4/photon-b
+sudo -u freemap ln -sfn /fm/data4/photon-b /opt/photon/photon-data.b
 ```
 
 The real paths are asymmetric (`photon` vs `photon-b`) because renaming a
@@ -127,13 +131,19 @@ Add the Photon lines to the existing `freemap` rule:
 
 ```
   /bin/systemctl enable --now photon@a, /bin/systemctl enable --now photon@b, \
-  /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b
+  /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b, \
+  /usr/bin/find /fm/data4/nginx-proxy-cache/photon -mindepth 1 -delete
 ```
+
+The `find` line is not optional either, just less dangerous: nginx writes the
+proxy cache as `www-data` with mode 700, so without it `freemap` cannot purge
+and every switchover keeps serving the retired index for up to 24h. The entry
+has to match the script's argv exactly, `PHOTON_CACHE_DIR` included.
 
 Check it took, since `sudo -n` failing mid-update is a hard failure:
 
 ```bash
-sudo -u freemap sudo -n -l | grep photon
+sudo -u freemap sudo -n -l | grep -E "photon|find"
 ```
 
 ## 7. First run, by hand

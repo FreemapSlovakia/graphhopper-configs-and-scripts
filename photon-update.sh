@@ -115,11 +115,16 @@ ln -s ./photon-upstream.${next}.conf ./photon-upstream.conf \
 sudo -n /bin/systemctl reload nginx || hard_fail "nginx reload failed"
 
 # The vhost caches responses for 24h, so without this the old index keeps being
-# served from cache long after the switchover.
-if [ -n "${PHOTON_CACHE_DIR:-}" ] && [ -d "$PHOTON_CACHE_DIR" ]; then
+# served from cache long after the switchover. nginx writes the cache as
+# www-data with mode 700, so this needs sudo — the sudoers entry has to match
+# this argv exactly, PHOTON_CACHE_DIR included.
+cache_note="purged"
+if [ -n "${PHOTON_CACHE_DIR:-}" ]; then
   echo "Purging the nginx proxy cache at $PHOTON_CACHE_DIR"
-  find "$PHOTON_CACHE_DIR" -mindepth 1 -delete \
-    || echo "WARNING: could not fully purge $PHOTON_CACHE_DIR" >&2
+  if ! sudo -n /usr/bin/find "$PHOTON_CACHE_DIR" -mindepth 1 -delete; then
+    cache_note="NOT purged — stale results may be served for up to 24h"
+    echo "WARNING: could not purge $PHOTON_CACHE_DIR" >&2
+  fi
 fi
 
 # Only now is this index really in service.
@@ -136,5 +141,6 @@ Photon geocoding data was updated successfully on ${host} at $(date).
   instance:  ${active} -> ${next}
   dump:      ${md5_line}
   languages: ${PHOTON_LANGUAGES}
+  cache:     ${cache_note}
 EOF
 echo "Success"
