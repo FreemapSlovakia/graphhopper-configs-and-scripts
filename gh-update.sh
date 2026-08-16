@@ -73,8 +73,10 @@ fi
 echo "Importing: $next"
 # graph-cache.{a,b} are symlinks to the real data dir; clear the target so
 # GraphHopper imports into a clean cache without clobbering the symlink.
+# Emptied rather than replaced — unlinking a directory needs write permission
+# on its parent, which is not guaranteed for a data dir living outside our own.
 cache_dir="$(readlink -f "graph-cache.${next}")"
-{ rm -rf "$cache_dir" && mkdir -p "$cache_dir"; } \
+{ mkdir -p "$cache_dir" && find "$cache_dir" -mindepth 1 -delete; } \
   || hard_fail "Could not clear the graph cache at $cache_dir"
 java -Xms2g -Xmx64g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml \
   || hard_fail "GraphHopper import into instance ${next} failed"
