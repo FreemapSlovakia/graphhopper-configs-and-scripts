@@ -47,13 +47,15 @@ if [ "$(stored_md5 run/osm.md5)" = "$remote_md5" ]; then
   exit 0
 fi
 
-if systemctl is-enabled --quiet graphhopper@a; then
-  active="a"
-elif systemctl is-enabled --quiet graphhopper@b; then
-  active="b"
-else
-  active="none"
-fi
+# Where traffic actually goes rather than which units are enabled — see the
+# same comment in photon-update.sh.
+case "$(readlink ./graphhopper.freemap.sk 2>/dev/null || true)" in
+  *graphhopper.freemap.sk.a) active="a" ;;
+  *graphhopper.freemap.sk.b) active="b" ;;
+  *) if systemctl is-enabled --quiet graphhopper@a; then active="a"
+     elif systemctl is-enabled --quiet graphhopper@b; then active="b"
+     else active="none"; fi ;;
+esac
 echo "Active: $active"
 
 download_and_verify "$GEOFABRIK_URL" "$remote_md5" osm
@@ -75,7 +77,10 @@ echo "Importing: $next"
 # GraphHopper imports into a clean cache without clobbering the symlink.
 # Emptied rather than replaced — unlinking a directory needs write permission
 # on its parent, which is not guaranteed for a data dir living outside our own.
-cache_dir="$(readlink -f "graph-cache.${next}")"
+# Sets data_dir.
+resolve_data_dir "graph-cache.${next}"
+cache_dir="$data_dir"
+assert_instance_idle "graphhopper@${next}"
 { mkdir -p "$cache_dir" && find "$cache_dir" -mindepth 1 -delete; } \
   || hard_fail "Could not clear the graph cache at $cache_dir"
 java -Xms2g -Xmx64g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml \
@@ -91,8 +96,7 @@ if ! wait_for_gh_ready "$next_port"; then
   hard_fail "New instance ${next} did not become ready on localhost:${next_port}"
 fi
 
-rm -f ./graphhopper.freemap.sk
-ln -s ./graphhopper.freemap.sk.${next} ./graphhopper.freemap.sk \
+swap_symlink "./graphhopper.freemap.sk.${next}" ./graphhopper.freemap.sk \
   || hard_fail "Could not point ./graphhopper.freemap.sk at instance ${next}"
 
 sudo -n /bin/systemctl reload nginx || hard_fail "nginx reload failed"

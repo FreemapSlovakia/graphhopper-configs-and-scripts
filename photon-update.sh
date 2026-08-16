@@ -50,13 +50,17 @@ if [ "$(stored_md5 run/photon.md5)" = "$remote_md5" ]; then
   exit 0
 fi
 
-if systemctl is-enabled --quiet photon@a; then
-  active="a"
-elif systemctl is-enabled --quiet photon@b; then
-  active="b"
-else
-  active="none"
-fi
+# Where traffic actually goes, which is the symlink nginx includes — not which
+# units are enabled. A run that died between the flip and retiring the old side
+# leaves both enabled, and picking the first enabled one would then choose the
+# instance currently serving and wipe it.
+case "$(readlink ./photon-upstream.conf 2>/dev/null || true)" in
+  *photon-upstream.a.conf) active="a" ;;
+  *photon-upstream.b.conf) active="b" ;;
+  *) if systemctl is-enabled --quiet photon@a; then active="a"
+     elif systemctl is-enabled --quiet photon@b; then active="b"
+     else active="none"; fi ;;
+esac
 echo "Active: $active"
 
 download_and_verify "$PHOTON_DUMP_URL" "$remote_md5" photon
@@ -77,7 +81,9 @@ echo "Importing: $next"
 # write permission on its *parent*, and these live directly in a root-owned
 # /fm/data4. Emptying only needs write on the directory itself, which freemap
 # has.
-data_dir="$(readlink -f "photon-data.${next}")"
+# Sets data_dir.
+resolve_data_dir "photon-data.${next}"
+assert_instance_idle "photon@${next}"
 { mkdir -p "$data_dir" && find "$data_dir" -mindepth 1 -delete; } \
   || hard_fail "Could not clear the Photon data dir at $data_dir"
 
@@ -96,12 +102,19 @@ zstd --stdout -d "$dump_file" \
 import_rcs=("${PIPESTATUS[@]}")
 set -e
 
-if [ "${import_rcs[0]}" -ne 0 ]; then
-  rm -f "$dump_file" run/photon-downloaded.md5
-  soft_fail "Could not decompress $dump_file (zstd exit ${import_rcs[0]}) — discarded, re-downloading next run"
-fi
+# java first: an importer that dies closes the pipe and zstd is killed by
+# SIGPIPE (141), so checking zstd first would report every import failure as a
+# corrupt download — deleting a good dump and retrying forever instead of
+# halting for a human.
 if [ "${import_rcs[1]}" -ne 0 ]; then
   hard_fail "Photon import into instance ${next} failed (java exit ${import_rcs[1]})"
+fi
+if [ "${import_rcs[0]}" -ne 0 ]; then
+  # The importer exited 0 on a stream that did not decompress cleanly, so the
+  # index it just built is silently short. Throw the dump away and start over;
+  # the half-built index is never switched to.
+  rm -f "$dump_file" run/photon-downloaded.md5
+  soft_fail "Could not decompress $dump_file (zstd exit ${import_rcs[0]}); the index may be partial — discarded, re-downloading next run"
 fi
 
 echo "Starting: $next"
@@ -114,8 +127,7 @@ if ! wait_for_photon_ready "$next_port"; then
   hard_fail "New instance ${next} did not return a geocoding result on localhost:${next_port}"
 fi
 
-rm -f ./photon-upstream.conf
-ln -s ./photon-upstream.${next}.conf ./photon-upstream.conf \
+swap_symlink "./photon-upstream.${next}.conf" ./photon-upstream.conf \
   || hard_fail "Could not point ./photon-upstream.conf at instance ${next}"
 
 sudo -n /bin/systemctl reload nginx || hard_fail "nginx reload failed"
@@ -124,8 +136,9 @@ sudo -n /bin/systemctl reload nginx || hard_fail "nginx reload failed"
 # served from cache long after the switchover. nginx writes the cache as
 # www-data with mode 700, so this needs sudo — the sudoers entry has to match
 # this argv exactly, PHOTON_CACHE_DIR included.
-cache_note="purged"
+cache_note="NOT purged — PHOTON_CACHE_DIR unset"
 if [ -n "${PHOTON_CACHE_DIR:-}" ]; then
+  cache_note="purged"
   echo "Purging the nginx proxy cache at $PHOTON_CACHE_DIR"
   if ! sudo -n /usr/bin/find "$PHOTON_CACHE_DIR" -mindepth 1 -delete; then
     cache_note="NOT purged — stale results may be served for up to 24h"

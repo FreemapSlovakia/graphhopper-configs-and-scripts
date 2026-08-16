@@ -8,7 +8,8 @@
 #                                  getting to report — driven by systemd's
 #                                  $MONITOR_* variables, wired up as OnFailure=
 #
-# Expects MAILGUN_API_KEY, MAILGUN_DOMAIN and NOTIFY_EMAIL in the environment:
+# Expects MAILGUN_API_KEY, MAILGUN_DOMAIN and NOTIFY_EMAIL in the environment,
+# and optionally NOTIFY_FROM so the two schedules can be filtered apart:
 # exported by the update script, or via EnvironmentFile= in the abort unit.
 
 set -euo pipefail
@@ -74,7 +75,7 @@ done
 curl -sS --fail-with-body --retry 3 --retry-connrefused --max-time 60 \
   --user "api:${MAILGUN_API_KEY}" \
   "https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages" \
-  -F from="graphhopper-noreply@${MAILGUN_DOMAIN}" \
+  -F from="${NOTIFY_FROM:-graphhopper-noreply@${MAILGUN_DOMAIN}}" \
   "${to_args[@]}" \
   -F subject="$subject" \
   -F text="$body"

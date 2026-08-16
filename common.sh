@@ -178,6 +178,32 @@ wget_failed() {
   soft_fail "$* (wget exit $rc)"
 }
 
+# Resolve an a/b data symlink to the real directory. `readlink -f` returns 0 and
+# echoes the path even when the link does not exist, which would quietly send a
+# multi-gigabyte import onto whatever filesystem the checkout lives on, so
+# require an actual symlink.
+# Sets data_dir. Not a $(...) helper, for the same reason as fetch_md5: the
+# hard_fail below has to run in the caller's shell.
+resolve_data_dir() { # symlink
+  [ -L "$1" ] || hard_fail "$1 is not a symlink — refusing to import into an unknown location"
+  data_dir="$(readlink -f "$1")"
+}
+
+# Never clear the data an instance is currently serving from. Reachable when a
+# previous run died between the nginx flip and retiring the old side, leaving
+# both instances enabled.
+assert_instance_idle() { # unit
+  if systemctl is-active --quiet "$1"; then
+    hard_fail "$1 is running — refusing to clear the data it is serving from"
+  fi
+}
+
+# Repoint a symlink atomically. nginx can reload at any moment — certbot, or the
+# other updater finishing — and a missing include target fails the whole config.
+swap_symlink() { # target, linkname
+  ln -sfn "$1" "$2.new" && mv -Tf "$2.new" "$2"
+}
+
 # Download to run/, resuming only a partial file that belongs to this same
 # remote object, and verify it. The target is always run/<basename of the URL>,
 # because wget -P is used rather than -O: -O with -c does not resume reliably.

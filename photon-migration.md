@@ -44,9 +44,19 @@ sudo -u freemap git reset --hard origin/main
 sudo -u freemap git branch --set-upstream-to=origin/main main
 ```
 
-`git reset --hard` overwrites tracked files only; the jars and the other
-untracked files are left alone. Check nginx is still happy and that the
-switchover file is now the real one:
+With an unborn `HEAD`, `git reset --hard` silently overwrites **any** untracked
+file whose path exists in `origin/main` — it gives none of the "would be
+overwritten" refusal that `git checkout` does. List the collisions first and
+move anything you care about aside:
+
+```bash
+git ls-tree -r --name-only origin/main | while read -r f; do
+  [ -e "$f" ] && echo "collides: $f"
+done
+```
+
+Then check nginx is still happy and that the switchover file is now the real
+one:
 
 ```bash
 sudo nginx -t
@@ -203,6 +213,26 @@ start `photon@a`. Delete it whenever you are confident:
 ```bash
 sudo rm -rf /fm/data4/photon
 ```
+
+## 8b. GraphHopper side, when you next deploy it
+
+`/opt/graphhopper` has not been updated since these scripts were split apart.
+When you pull there, two things go with it:
+
+```bash
+# gh-notify.sh is now notify.sh, so the abort unit's ExecStart changes
+sudo cp /opt/graphhopper/gh-update-abort.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# the download state files gained an "osm-" prefix; without this the next run
+# discards a perfectly good ~35 GB .pbf and fetches it again
+sudo -u freemap sh -c 'cd /opt/graphhopper/run && for f in downloading downloaded mismatch; do
+  [ -e "$f.md5" ] && mv -n "$f.md5" "osm-$f.md5"; done'
+```
+
+Neither is urgent: the rename only costs a re-download, and the abort unit only
+matters if an update is killed outright. Both are only safe once the current
+import has finished — the running script calls `./gh-notify.sh` by name.
 
 ## 9. Enable the schedule
 

@@ -5,4 +5,5 @@ PHOTON_IMPORT_HEAP=16g
 PHOTON_CACHE_DIR=/fm/data4/nginx-proxy-cache/photon
 MAILGUN_API_KEY=key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 MAILGUN_DOMAIN=mg.example.com
+NOTIFY_FROM=photon-noreply@mg.example.com
 NOTIFY_EMAIL=admin@example.com,other@example.com
