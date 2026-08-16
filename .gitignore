@@ -6,3 +6,12 @@ srtmprovider
 sonny-dem
 graph-cache.a
 graph-cache.b
+photon-update.conf
+photon-1.2.1.jar
+photon-1.3.0.jar
+photon-upstream.conf
+photon-data.a
+photon-data.b
+nginx-photon.conf
+photon.service
+photon.freemap.sk.hardened
