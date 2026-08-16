@@ -226,8 +226,8 @@ happily resolves a name that is not there and the import would then land on the
 checkout's own filesystem with nothing to show that it had.
 
 ```bash
-ln -s /fm/data4/graphhopper-data/a graph-cache.a
-ln -s /fm/data4/graphhopper-data/b graph-cache.b
+ln -s /fm/data4/graphhopper-data/graph-cache.a graph-cache.a
+ln -s /fm/data4/graphhopper-data/graph-cache.b graph-cache.b
 ```
 
 The targets themselves are created on first import.

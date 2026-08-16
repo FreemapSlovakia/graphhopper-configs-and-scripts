@@ -72,7 +72,15 @@ esac
 # anything — and, more to the point, without a hand-written address drifting
 # from MAILGUN_DOMAIN. A From on a domain Mailgun does not hold for us is
 # rejected, and --fail-with-body turns that into a mail nobody receives.
-from="${NOTIFY_FROM:-$(printf '%s' "$service" | tr '[:upper:]' '[:lower:]')-noreply@${MAILGUN_DOMAIN}}"
+#
+# SERVICE is a display name for subject lines, so it has to be slugged before it
+# can be a local part: a service called "Tile Server" would otherwise build an
+# address with a space in it, and the rejected send would cost us exactly the
+# notification we were trying to deliver.
+slug="$(printf '%s' "$service" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
+slug="${slug#-}"
+slug="${slug%-}"
+from="${NOTIFY_FROM:-${slug:-update}-noreply@${MAILGUN_DOMAIN}}"
 
 to_args=()
 IFS=',' read -ra emails <<< "${NOTIFY_EMAIL}"

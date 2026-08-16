@@ -196,7 +196,9 @@ wget_failed() {
 # hard_fail below has to run in the caller's shell.
 resolve_data_dir() { # symlink or directory
   if [ ! -L "$1" ] && [ ! -d "$1" ]; then
-    hard_fail "$1 is neither a symlink nor a directory — refusing to import into an unknown location"
+    # Says what to create, because the obvious reaction to this message —
+    # mkdir "$1" — is the one repair that puts the import on the wrong disk.
+    hard_fail "$1 does not exist — create it as a symlink to the data volume (a plain directory only if the data really belongs inside this checkout); do not mkdir it blindly"
   fi
   data_dir="$(readlink -f "$1")"
 }
