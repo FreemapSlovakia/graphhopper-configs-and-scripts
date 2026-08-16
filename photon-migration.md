@@ -68,14 +68,24 @@ Both point at 2322, so this reload changes nothing that a client can see.
 
 The live index stays exactly where it is; side `a` just points at it.
 
-`/fm/data4` is `755 root:root`, so the new directory has to be made by root and
-handed over — `install -d` does both, matching the `2775 freemap:freemap` on the
-existing one.
+The instance directories live under one `freemap`-owned parent, so the import
+can create and remove them itself — the same arrangement as
+`/fm/data4/graphhopper-data`. `/fm/data4` is `755 root:root`, so root has to
+make that parent and hand it over.
+
+```bash
+sudo install -d -o freemap -g freemap -m 755 /fm/data4/photon-data
+sudo -u freemap ln -sfn /fm/data4/photon-data/b /opt/photon/photon-data.b
+```
+
+Side `b` does not need creating — the update script does `mkdir -p` on it.
+
+Side `a` keeps pointing at the existing live index for now; moving a directory
+out from under the running JVM is not worth the risk, and side `a` is rebuilt
+from scratch by the *next* update anyway:
 
 ```bash
 sudo -u freemap ln -sfn /fm/data4/photon /opt/photon/photon-data.a
-sudo install -d -o freemap -g freemap -m 2775 /fm/data4/photon-b
-sudo -u freemap ln -sfn /fm/data4/photon-b /opt/photon/photon-data.b
 ```
 
 The real paths are asymmetric (`photon` vs `photon-b`) because renaming a
@@ -179,11 +189,19 @@ sudo systemctl daemon-reload
 `/fm/data4/photon` — and clears the directory first. Doing that while the old
 process still has the index open leaves it serving from deleted inodes.
 
-Optional tidy-up now that side `a` is idle:
+Now that side `a` is idle, move it under the shared parent so both sides match.
+No data is copied — side `a` is rebuilt by the next update regardless:
 
 ```bash
-sudo -u freemap mv /fm/data4/photon /fm/data4/photon-a
-sudo -u freemap ln -sfn /fm/data4/photon-a /opt/photon/photon-data.a
+sudo -u freemap ln -sfn /fm/data4/photon-data/a /opt/photon/photon-data.a
+```
+
+Keep the old `/fm/data4/photon` until you are satisfied with the new index; it
+is the rollback copy. To fall back to it, point `photon-data.a` back at it and
+start `photon@a`. Delete it whenever you are confident:
+
+```bash
+sudo rm -rf /fm/data4/photon
 ```
 
 ## 9. Enable the schedule

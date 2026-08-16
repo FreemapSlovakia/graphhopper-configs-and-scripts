@@ -48,8 +48,11 @@ komoot's. The tradeoff is roughly 7 hours of import per update.
 - The dump is downloaded and verified, then streamed through `zstd -d` into the
   importer; the plain JSONL is never written to disk.
 - Instances `photon@a` (port 2322) and `photon@b` (2323), data in
-  `photon-data.{a,b}` — symlinks to the real directories, mirroring
-  `graph-cache.{a,b}`.
+  `photon-data.{a,b}` — symlinks to `/fm/data4/photon-data/{a,b}`, mirroring
+  how `graph-cache.{a,b}` point into `/fm/data4/graphhopper-data`. The parent
+  is owned by `freemap` so the import can create and remove the instance
+  directories itself; the scripts also empty rather than replace them, so they
+  work even where the parent is not writable.
 - The vhost `include`s `photon-upstream.conf`, a symlink flipped between
   `photon-upstream.{a,b}.conf`. Only the `proxy_pass` line differs, so the TLS
   and caching config cannot drift between the two sides.
