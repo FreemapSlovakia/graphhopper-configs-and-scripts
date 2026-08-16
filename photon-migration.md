@@ -33,7 +33,17 @@ printf 'proxy_pass http://127.0.0.1:2322/;\n' | sudo -u freemap tee /opt/photon/
 it out of the way first (`photon.freemap.sk.hardened` is a byte-identical copy
 that stays behind as a backup).
 
+The vhost the checkout is about to overwrite references two nginx names that
+live outside this repo, in `/etc/nginx/conf.d/nginx-photon.conf`. Confirm they
+are there *before* the swap — afterwards a missing one breaks the live config
+and every reload with it:
+
 ```bash
+grep -E 'photon_req|keys_zone=PHOTON' /etc/nginx/conf.d/nginx-photon.conf
+```
+
+```bash
+sudo -u freemap mkdir -p /fm/data4/martin/photon-install
 sudo -u freemap mv /opt/photon/photon.freemap.sk /fm/data4/martin/photon-install/photon.freemap.sk.pre-git
 
 cd /opt/photon
@@ -133,16 +143,23 @@ Neither command touches the running process — `disable` and `enable` only
 manage boot-time symlinks. After them a reboot would start `photon@a` on 2322
 against the same index, which is the state we want anyway.
 
-**`enable photon@a` is not optional.** The update script picks the idle side by
-asking `systemctl is-enabled photon@a`. With neither instance enabled it
-resolves the active side to `none` and treats **`a` as the target to import
-into** — and `a` is the live index, which it would `rm -rf` before importing.
+**What actually protects the live index is the symlink from step 2.** The
+script takes the active side from `photon-upstream.conf` — where traffic really
+goes — and only falls back to `is-enabled` when that symlink is missing or is
+still the plain file from step 1. So `photon-upstream.conf -> …a.conf` is what
+makes the first run import into `b` rather than emptying `a`.
 
-Verify before going further:
+`enable photon@a` still matters, for two reasons: it is the fallback if that
+symlink is ever lost, and it is what makes a reboot bring the right instance
+back. Do it — just don't mistake it for the thing standing between you and the
+live index.
+
+Verify all three before going further:
 
 ```bash
-systemctl is-enabled photon@a       # enabled
-systemctl is-active  photon.service # active — still serving on 2322
+readlink /opt/photon/photon-upstream.conf   # ./photon-upstream.a.conf
+systemctl is-enabled photon@a               # enabled
+systemctl is-active  photon.service         # active — still serving on 2322
 ```
 
 ## 6. Sudoers
@@ -171,6 +188,7 @@ sudo -u freemap sudo -n -l | grep -E "photon|find"
 Do not enable the timer yet — watch one run first.
 
 ```bash
+ls -l /opt/photon/photon-1.3.0.jar   # or you find out after the 13 GB download
 sudo systemctl start --no-block photon-update.service
 journalctl -fu photon-update.service
 ```
@@ -183,7 +201,9 @@ Peak usage during the run: ~131 GB disk (59 GB live + ~59 GB new + 13 GB dump)
 and ~32 GB RAM across the three JVMs. Both are comfortable here.
 
 If it fails it writes `/opt/photon/run/halted` with the reason and mails you;
-nothing switches over, and the live index is untouched.
+nothing switches over, and the live index is untouched. Fix the cause, then
+`sudo -u freemap rm /opt/photon/run/halted` and start the service again — the
+verified dump is kept, so a retry resumes at the import.
 
 ## 8. Retire the old service ⚠
 
@@ -195,9 +215,17 @@ sudo rm /etc/systemd/system/photon.service
 sudo systemctl daemon-reload
 ```
 
-**Do this before the next update runs.** That run imports into side `a` —
-`/fm/data4/photon` — and clears the directory first. Doing that while the old
-process still has the index open leaves it serving from deleted inodes.
+**Do this before the next update runs — step 8 must precede step 9.** That run
+imports into side `a`, `/fm/data4/photon`, and empties the directory first.
+Doing that while the old process still has the index open leaves it serving
+from deleted inodes.
+
+This is the one hazard in the migration that the code cannot catch for you.
+`assert_instance_idle` refuses to clear a data dir whose instance is running,
+but it asks about `photon@a` and `photon@b` — and the orphan is `photon.service`,
+a different unit entirely. Ordering is the whole protection here, which is why
+the schedule is not enabled until step 9. Once this step has deleted the unit,
+the hazard is gone permanently.
 
 Now that side `a` is idle, move it under the shared parent so both sides match.
 No data is copied — side `a` is rebuilt by the next update regardless:
