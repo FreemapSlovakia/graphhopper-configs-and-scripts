@@ -15,3 +15,6 @@ photon-data.b
 nginx-photon.conf
 photon.service
 photon.freemap.sk.hardened
+# swap_symlink's staging name, left behind only if a run dies mid-swap
+*.conf.new
+graphhopper.freemap.sk.new

@@ -40,7 +40,10 @@ host="$(hostname)"
 reported=0
 
 notify() { # subject in $1, body on stdin
-  ./notify.sh "$1" || echo "WARNING: could not send notification: $1" >&2
+  # SERVICE goes across explicitly rather than through the config's `set -a`,
+  # so the sender is right whichever way notify.sh is reached.
+  SERVICE="$SERVICE" ./notify.sh "$1" \
+    || echo "WARNING: could not send notification: $1" >&2
 }
 
 # Stop the schedule until a human has looked. A marker file rather than
@@ -178,14 +181,23 @@ wget_failed() {
   soft_fail "$* (wget exit $rc)"
 }
 
-# Resolve an a/b data symlink to the real directory. `readlink -f` returns 0 and
-# echoes the path even when the link does not exist, which would quietly send a
-# multi-gigabyte import onto whatever filesystem the checkout lives on, so
-# require an actual symlink.
+# Resolve an a/b data path to the real directory. `readlink -f` returns 0 and
+# echoes the path even when nothing is there, which would quietly send a
+# multi-gigabyte import onto whatever filesystem the checkout lives on, so the
+# path has to already exist as something.
+#
+# A symlink is the normal case and is accepted even when dangling — the target
+# is created on first import. A plain directory is accepted too, for a checkout
+# whose data simply lives in place. Nothing at all is the error: that is a lost
+# symlink, and inventing a directory in its place is how 60 GB ends up on the
+# OS disk with everything still apparently working.
+#
 # Sets data_dir. Not a $(...) helper, for the same reason as fetch_md5: the
 # hard_fail below has to run in the caller's shell.
-resolve_data_dir() { # symlink
-  [ -L "$1" ] || hard_fail "$1 is not a symlink — refusing to import into an unknown location"
+resolve_data_dir() { # symlink or directory
+  if [ ! -L "$1" ] && [ ! -d "$1" ]; then
+    hard_fail "$1 is neither a symlink nor a directory — refusing to import into an unknown location"
+  fi
   data_dir="$(readlink -f "$1")"
 }
 

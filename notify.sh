@@ -8,9 +8,11 @@
 #                                  getting to report — driven by systemd's
 #                                  $MONITOR_* variables, wired up as OnFailure=
 #
-# Expects MAILGUN_API_KEY, MAILGUN_DOMAIN and NOTIFY_EMAIL in the environment,
-# and optionally NOTIFY_FROM so the two schedules can be filtered apart:
+# Expects MAILGUN_API_KEY, MAILGUN_DOMAIN and NOTIFY_EMAIL in the environment:
 # exported by the update script, or via EnvironmentFile= in the abort unit.
+# SERVICE names the schedule (the update scripts pass it; the abort units pass
+# it as the --abrupt argument) and only shapes the From address. NOTIFY_FROM
+# overrides that address outright, but it must be on MAILGUN_DOMAIN.
 
 set -euo pipefail
 
@@ -59,10 +61,18 @@ Check the log for details:
     exit 1
     ;;
   *)
+    service="${SERVICE:-Update}"
     subject="$1"
     body="$(cat)"
     ;;
 esac
+
+# Sender defaults to <service>-noreply@<the domain we are sending through>, so
+# the two schedules can be filtered apart without anyone having to configure
+# anything — and, more to the point, without a hand-written address drifting
+# from MAILGUN_DOMAIN. A From on a domain Mailgun does not hold for us is
+# rejected, and --fail-with-body turns that into a mail nobody receives.
+from="${NOTIFY_FROM:-$(printf '%s' "$service" | tr '[:upper:]' '[:lower:]')-noreply@${MAILGUN_DOMAIN}}"
 
 to_args=()
 IFS=',' read -ra emails <<< "${NOTIFY_EMAIL}"
@@ -75,7 +85,7 @@ done
 curl -sS --fail-with-body --retry 3 --retry-connrefused --max-time 60 \
   --user "api:${MAILGUN_API_KEY}" \
   "https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages" \
-  -F from="${NOTIFY_FROM:-graphhopper-noreply@${MAILGUN_DOMAIN}}" \
+  -F from="$from" \
   "${to_args[@]}" \
   -F subject="$subject" \
   -F text="$body"

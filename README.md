@@ -217,7 +217,22 @@ Install Sonny's DTM tiles into `sonny-dem/` before the first import — see
 [sonny-tiles.md](sonny-tiles.md). Without them the import fails on the first
 node it cannot find a tile for.
 
-### 4. Sudoers
+### 4. Graph directories
+
+`graph-cache.{a,b}` must exist before the first run — as symlinks to wherever
+the graphs really live, or as plain directories to keep them here. The update
+script refuses to import into a path that is neither, because `readlink -f`
+happily resolves a name that is not there and the import would then land on the
+checkout's own filesystem with nothing to show that it had.
+
+```bash
+ln -s /fm/data4/graphhopper-data/a graph-cache.a
+ln -s /fm/data4/graphhopper-data/b graph-cache.b
+```
+
+The targets themselves are created on first import.
+
+### 5. Sudoers
 
 ```
 freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
@@ -228,7 +243,7 @@ freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
   /usr/bin/find /fm/data4/nginx-proxy-cache/photon -mindepth 1 -delete
 ```
 
-### 5. Install and enable units
+### 6. Install and enable units
 
 ```bash
 cp graphhopper@.service gh-update.service gh-update.timer gh-update-abort.service \
