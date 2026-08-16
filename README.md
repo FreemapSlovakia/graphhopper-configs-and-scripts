@@ -1,22 +1,67 @@
-# GraphHopper Update Scripts
+# Freemap Routing & Geocoding Ops
 
-These scripts keep GraphHopper routing data up to date using systemd timers and services.
+Scripts that keep the **GraphHopper** routing data and the **Photon** geocoding
+index up to date, using systemd timers and services.
+
+Both follow the same shape — check a remote checksum, download and verify,
+import into the idle instance, health-check it, flip nginx, retire the old one
+— so the machinery is shared and only the service-specific steps differ.
 
 ## Scripts
 
-- `gh-update.sh` — downloads OSM data, imports it into the inactive instance, switches nginx to it, stops the old instance, and emails the result.
-- `gh-notify.sh` — sends one Mailgun email. Called by `gh-update.sh` with a subject and a body on stdin, or by systemd with `--abrupt` when the update died before it could report.
+| Script             | Role                                                                   |
+| ------------------ | ---------------------------------------------------------------------- |
+| `common.sh`        | Shared scaffolding: failure classification, halting, retries, downloads |
+| `gh-update.sh`     | GraphHopper: OSM extract → import → switchover                          |
+| `photon-update.sh` | Photon: JSONL dump → import → switchover                                |
+| `notify.sh`        | Sends one Mailgun email (subject + body on stdin, or `--abrupt`)        |
 
-State kept between runs in `run/`:
+The repository is checked out **twice** on the server, at `/opt/graphhopper`
+and `/opt/photon`. Each checkout keeps its own `run/` state and its own
+`*-update.conf` and ignores the other service's files. That is what lets both
+share one `notify.sh` and one `common.sh` rather than carrying divergent copies
+of the same failure handling.
 
-| File              | Meaning                                                      |
-| ----------------- | ------------------------------------------------------------ |
-| `osm.md5`         | Checksum line of the currently imported extract               |
-| `downloading.md5` | Checksum the partially downloaded `.pbf` is expected to have  |
-| `downloaded.md5`  | Checksum of a fully downloaded and verified `.pbf`            |
-| `mismatch.md5`    | Checksum that already failed verification once                |
-| `fail-streak`     | Consecutive recoverable failures                              |
-| `halted`          | Present = every run exits immediately until it is removed     |
+State kept between runs in `run/`, where `<x>` is `osm` or `photon`:
+
+| File                  | Meaning                                                     |
+| --------------------- | ----------------------------------------------------------- |
+| `osm.md5`             | Checksum line of the currently imported OSM extract          |
+| `photon.md5`          | Checksum line of the currently imported Photon dump          |
+| `<x>-downloading.md5` | Checksum the partially downloaded file is expected to have   |
+| `<x>-downloaded.md5`  | Checksum of a fully downloaded and verified file             |
+| `<x>-mismatch.md5`    | Checksum that already failed verification once               |
+| `fail-streak`         | Consecutive recoverable failures                             |
+| `halted`              | Present = every run exits immediately until it is removed    |
+
+## Photon
+
+Photon is fed from komoot's JSONL dump rather than the prebuilt index tarball,
+because the index has to carry our own language list
+(`sk,cs,en,de,fr,it,hu,pl,sl,hr,sr,uk,ro,nl,es,pt`) and the prebuilt one carries
+komoot's. The tradeoff is roughly 7 hours of import per update.
+
+- Source: `download1.graphhopper.com/public/europe/photon-dump-europe-1.0-latest.jsonl.zst` (~13 GB).
+  The top-level `photon-db-latest.tar.bz2` on that server is stale (built
+  2025-07-20); only the versioned paths under `europe/` are maintained.
+- Rebuilt upstream roughly weekly, so `photon-update.timer` runs **daily**, not hourly.
+- The dump is downloaded and verified, then streamed through `zstd -d` into the
+  importer; the plain JSONL is never written to disk.
+- Instances `photon@a` (port 2322) and `photon@b` (2323), data in
+  `photon-data.{a,b}` — symlinks to the real directories, mirroring
+  `graph-cache.{a,b}`.
+- The vhost `include`s `photon-upstream.conf`, a symlink flipped between
+  `photon-upstream.{a,b}.conf`. Only the `proxy_pass` line differs, so the TLS
+  and caching config cannot drift between the two sides.
+- The health check requires an actual geocoding result: an index that is open
+  but empty answers 200 with no features, and a status-only check would switch
+  traffic to a geocoder that finds nothing.
+- After every switchover the nginx proxy cache is purged — the vhost caches
+  responses for 24h and would otherwise keep serving the retired index.
+
+Moving the existing hand-built instance onto this setup is a one-time sequence
+with a couple of order-dependent steps — see
+[photon-migration.md](photon-migration.md).
 
 ## Systemd Units
 
@@ -184,7 +229,7 @@ freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
 ```bash
 cp graphhopper@.service gh-update.service gh-update.timer gh-update-abort.service \
   /etc/systemd/system/
-chmod +x gh-update.sh gh-notify.sh
+chmod +x gh-update.sh notify.sh
 systemctl daemon-reload
 
 # Start whichever graphhopper instance is currently active (e.g. a).
@@ -194,6 +239,10 @@ systemctl enable --now graphhopper@a.service
 # Enable the timer (replaces cron)
 systemctl enable --now gh-update.timer
 ```
+
+For Photon, the equivalent units are `photon@.service`, `photon-update.service`,
+`photon-update.timer` and `photon-update-abort.service`, installed from the
+`/opt/photon` checkout — see [photon-migration.md](photon-migration.md).
 
 ## Logs
 
