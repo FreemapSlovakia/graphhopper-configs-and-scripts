@@ -219,7 +219,14 @@ sudo rm -rf /fm/data4/photon
 `/opt/graphhopper` has not been updated since these scripts were split apart.
 When you pull there, two things go with it:
 
+Do it as one block, with no run in flight. Between the pull and reinstalling
+the abort unit its `ExecStart` points at a name that no longer exists, so you
+are briefly blind to exactly the failure it covers — an OOM kill of the 64 GB
+import.
+
 ```bash
+systemctl is-active gh-update.service     # must NOT be active
+
 # gh-notify.sh is now notify.sh, so the abort unit's ExecStart changes
 sudo cp /opt/graphhopper/gh-update-abort.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -233,6 +240,17 @@ sudo -u freemap sh -c 'cd /opt/graphhopper/run && for f in downloading downloade
 Neither is urgent: the rename only costs a re-download, and the abort unit only
 matters if an update is killed outright. Both are only safe once the current
 import has finished — the running script calls `./gh-notify.sh` by name.
+
+The review fixes added three conditions that now hard-fail the run rather than
+limping on. All three hold on fm5 today, but they are worth confirming after
+any change to the layout, because failing one costs a FAILED email and a manual
+`rm run/halted`:
+
+```bash
+ls -d /opt/graphhopper/graph-cache.a /opt/graphhopper/graph-cache.b  # must exist
+systemctl is-enabled graphhopper@a graphhopper@b                     # exactly one enabled
+readlink /opt/graphhopper/graphhopper.freemap.sk                     # a symlink to .a or .b
+```
 
 ## 9. Enable the schedule
 
