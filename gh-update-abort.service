@@ -6,4 +6,4 @@ Type=oneshot
 User=freemap
 WorkingDirectory=/opt/graphhopper
 EnvironmentFile=/opt/graphhopper/gh-update.conf
-ExecStart=/opt/graphhopper/gh-notify.sh --abrupt
+ExecStart=/opt/graphhopper/notify.sh --abrupt GraphHopper

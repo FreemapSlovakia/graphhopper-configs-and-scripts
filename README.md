@@ -20,12 +20,16 @@ State kept between runs in `run/`:
 
 ## Systemd Units
 
-| Unit                       | Purpose                                              |
-| -------------------------- | ---------------------------------------------------- |
-| `graphhopper@.service`     | GraphHopper routing server (instances `a` and `b`)   |
-| `gh-update.service`        | Oneshot update job                                   |
-| `gh-update.timer`          | Triggers `gh-update.service` hourly                  |
-| `gh-update-abort.service`  | `OnFailure=` backstop for an update that was killed  |
+| Unit                          | Purpose                                             |
+| ----------------------------- | --------------------------------------------------- |
+| `graphhopper@.service`        | GraphHopper routing server (instances `a` and `b`)  |
+| `gh-update.service`           | Oneshot update job                                  |
+| `gh-update.timer`             | Triggers `gh-update.service` hourly                 |
+| `gh-update-abort.service`     | `OnFailure=` backstop for an update that was killed |
+| `photon@.service`             | Photon geocoder (instances `a` and `b`)             |
+| `photon-update.service`       | Oneshot update job                                  |
+| `photon-update.timer`         | Triggers `photon-update.service` daily              |
+| `photon-update-abort.service` | `OnFailure=` backstop for an update that was killed |
 
 The update script sends its own mail, at the point of failure, where the reason
 is still in a variable. Nothing is handed to another process through the
@@ -170,7 +174,9 @@ node it cannot find a tile for.
 ```
 freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
   /bin/systemctl enable --now graphhopper@a, /bin/systemctl enable --now graphhopper@b, \
-  /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b
+  /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b, \
+  /bin/systemctl enable --now photon@a, /bin/systemctl enable --now photon@b, \
+  /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b
 ```
 
 ### 5. Install and enable units

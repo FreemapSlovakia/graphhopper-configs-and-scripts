@@ -1,0 +1,11 @@
+[Unit]
+Description=Photon geocoder data update (daily)
+
+[Timer]
+# The upstream dumps are rebuilt roughly weekly, so a daily check is plenty;
+# a run with nothing to do costs one HTTP request.
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Photon geocoder data update
+# photon-update.sh emails its own results. This covers only the deaths where it
+# never got the chance to: OOM kill, SIGKILL, watchdog.
+OnFailure=photon-update-abort.service
+
+[Service]
+Type=oneshot
+User=freemap
+WorkingDirectory=/opt/photon
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ExecStart=/usr/bin/stdbuf -oL -eL /opt/photon/photon-update.sh

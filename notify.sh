@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# Sends a Mailgun email.
+# Sends a Mailgun email. Shared by the GraphHopper and Photon updaters.
 #
-#   gh-notify.sh <subject>   body read from stdin; used by gh-update.sh, which
-#                            reports its own results
-#   gh-notify.sh --abrupt    backstop for gh-update.service dying without
-#                            getting to report — driven by systemd's $MONITOR_*
-#                            variables, wired up as OnFailure=
+#   notify.sh <subject>            body read from stdin; used by the update
+#                                  scripts, which report their own results
+#   notify.sh --abrupt <service>   backstop for an update service dying without
+#                                  getting to report — driven by systemd's
+#                                  $MONITOR_* variables, wired up as OnFailure=
 #
 # Expects MAILGUN_API_KEY, MAILGUN_DOMAIN and NOTIFY_EMAIL in the environment:
-# exported by gh-update.sh, or via EnvironmentFile= in gh-update-abort.service.
+# exported by the update script, or via EnvironmentFile= in the abort unit.
 
 set -euo pipefail
 
@@ -19,23 +19,26 @@ host="$(hostname)"
 
 case "${1:-}" in
   --abrupt)
-    # gh-update.sh mails its own failures, so anything that exited under its
-    # own control has already been reported. Only deaths it could not handle —
-    # OOM kill, SIGKILL, watchdog — are ours to announce.
+    service="${2:-Update}"
+    unit="${MONITOR_UNIT:-the update service}"
+
+    # The update script mails its own failures, so anything that exited under
+    # its own control has already been reported. Only deaths it could not
+    # handle — OOM kill, SIGKILL, watchdog — are ours to announce.
     if [ "${MONITOR_SERVICE_RESULT:-}" = "exit-code" ]; then
-      echo "gh-update.service exited with a status; it reported for itself"
+      echo "${unit} exited with a status; it reported for itself"
       exit 0
     fi
 
     # It never reached its own halt(), and an import killed once will likely be
     # killed again, so stop the schedule from here.
     { echo "Halted $(date -Is)"
-      echo "Reason: ${MONITOR_UNIT:-gh-update.service} died (${MONITOR_SERVICE_RESULT:-unknown})"
+      echo "Reason: ${unit} died (${MONITOR_SERVICE_RESULT:-unknown})"
       echo "To resume: rm $(pwd)/run/halted"
     } > run/halted
 
-    subject="GraphHopper update DIED on ${host}"
-    body="${MONITOR_UNIT:-gh-update.service} terminated without reporting a result on ${host}
+    subject="${service} update DIED on ${host}"
+    body="${unit} terminated without reporting a result on ${host}
 at $(date).
 
   result: ${MONITOR_SERVICE_RESULT:-unknown}
@@ -47,11 +50,11 @@ and the next runs will exit immediately. After fixing it:
   rm $(pwd)/run/halted
 
 Check the log for details:
-  journalctl -u gh-update.service"
+  journalctl -u ${unit}"
     ;;
   "" | -*)
-    echo "usage: $0 <subject>    (body on stdin)" >&2
-    echo "       $0 --abrupt" >&2
+    echo "usage: $0 <subject>            (body on stdin)" >&2
+    echo "       $0 --abrupt <service>" >&2
     exit 1
     ;;
   *)

@@ -1,0 +1,9 @@
+[Unit]
+Description=Photon update abort notification
+
+[Service]
+Type=oneshot
+User=freemap
+WorkingDirectory=/opt/photon
+EnvironmentFile=/opt/photon/photon-update.conf
+ExecStart=/opt/photon/notify.sh --abrupt Photon

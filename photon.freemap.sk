@@ -1,0 +1,57 @@
+server {
+
+	server_name photon.freemap.sk;
+
+	access_log /var/log/nginx/access_photon.log;
+	error_log /var/log/nginx/error_photon.log warn;
+
+	# nginx.conf enables gzip but leaves gzip_types at the default (text/html only)
+	gzip_types application/json;
+
+	location / {
+		# 20 r/s sustained, bursts to 40: autocomplete fires per keystroke, so a
+		# low limit hurts real users sharing one carrier NAT.
+		limit_req zone=photon_req burst=40 nodelay;
+		limit_req_status 429;
+
+		# The index only changes on re-import, so responses stay valid for a day.
+		# Clear /fm/data4/nginx-proxy-cache/photon after every re-import.
+		proxy_cache PHOTON;
+		proxy_cache_key $request_uri;
+		proxy_cache_valid 200 24h;
+		proxy_cache_lock on;
+		proxy_cache_use_stale error timeout updating;
+		add_header X-Cache-Status $upstream_cache_status;
+
+		# The cache key is the URI alone, but photon falls back to the
+		# Accept-Language header when ?lang= is absent — hiding the header
+		# keeps one clients language out of anothers cached response.
+		proxy_set_header Accept-Language "";
+
+		# Which instance serves traffic. photon-update.sh flips this symlink
+		# between photon-upstream.{a,b}.conf and reloads nginx.
+		include /opt/photon/photon-upstream.conf;
+	}
+
+    listen 443 ssl; # managed by Certbot
+    listen [::]:443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/photon.freemap.sk/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/photon.freemap.sk/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+}
+server {
+    if ($host = photon.freemap.sk) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+	listen 80;
+	listen [::]:80;
+
+	server_name photon.freemap.sk;
+    return 404; # managed by Certbot
+
+
+}

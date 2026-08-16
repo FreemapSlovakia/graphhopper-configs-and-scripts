@@ -1,0 +1,8 @@
+PHOTON_DUMP_URL=https://download1.graphhopper.com/public/europe/photon-dump-europe-1.0-latest.jsonl.zst
+PHOTON_JAR=/opt/photon/photon-1.3.0.jar
+PHOTON_LANGUAGES=sk,cs,en,de,fr,it,hu,pl,sl,hr,sr,uk,ro,nl,es,pt
+PHOTON_IMPORT_HEAP=16g
+PHOTON_CACHE_DIR=/fm/data4/nginx-proxy-cache/photon
+MAILGUN_API_KEY=key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+MAILGUN_DOMAIN=mg.example.com
+NOTIFY_EMAIL=admin@example.com,other@example.com
