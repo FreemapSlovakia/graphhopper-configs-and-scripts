@@ -55,16 +55,18 @@ komoot's. The tradeoff is roughly 7 hours of import per update.
   work even where the parent is not writable.
 - The vhost `include`s `photon-upstream.conf`, a symlink flipped between
   `photon-upstream.{a,b}.conf`. Only the `proxy_pass` line differs, so the TLS
-  and caching config cannot drift between the two sides.
+  config cannot drift between the two sides.
 - The health check requires an actual geocoding result: an index that is open
   but empty answers 200 with no features, and a status-only check would switch
   traffic to a geocoder that finds nothing.
-- After every switchover the nginx proxy cache is purged — the vhost caches
-  responses for 24h and would otherwise keep serving the retired index.
-
-Moving the existing hand-built instance onto this setup is a one-time sequence
-with a couple of order-dependent steps — see
-[photon-migration.md](photon-migration.md).
+- Responses are **not** cached in nginx, so the switchover takes effect on the
+  reload and an uptime check reaches the real backend. See the comment in
+  `photon.freemap.sk` for the measurements behind that.
+- The jar version appears in two places that have to agree: `ExecStart` in
+  `photon@.service` and `PHOTON_JAR` in `photon-update.conf`.
+- `nginx-photon.conf` is installed by hand at `/etc/nginx/conf.d/` and is not
+  managed by this checkout. It holds the `limit_req_zone` the vhost depends on,
+  so the vhost cannot be deployed anywhere that file is missing.
 
 ## Systemd Units
 
@@ -260,7 +262,12 @@ systemctl enable --now gh-update.timer
 
 For Photon, the equivalent units are `photon@.service`, `photon-update.service`,
 `photon-update.timer` and `photon-update-abort.service`, installed from the
-`/opt/photon` checkout — see [photon-migration.md](photon-migration.md).
+`/opt/photon` checkout.
+
+`photon-update.timer` is `Persistent=true`. Enabling it with no
+`/var/lib/systemd/timers/stamp-photon-update.timer` present can trigger a run
+on the spot — a 13 GB download and a ~7h import. `touch` that stamp as root
+first if you want `enable --now` to be a no-op until the next scheduled hour.
 
 ## Logs
 
