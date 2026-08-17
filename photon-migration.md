@@ -168,19 +168,13 @@ Add the Photon lines to the existing `freemap` rule:
 
 ```
   /bin/systemctl enable --now photon@a, /bin/systemctl enable --now photon@b, \
-  /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b, \
-  /usr/bin/find /fm/data4/nginx-proxy-cache/photon -mindepth 1 -delete
+  /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b
 ```
-
-The `find` line is not optional either, just less dangerous: nginx writes the
-proxy cache as `www-data` with mode 700, so without it `freemap` cannot purge
-and every switchover keeps serving the retired index for up to 24h. The entry
-has to match the script's argv exactly, `PHOTON_CACHE_DIR` included.
 
 Check it took, since `sudo -n` failing mid-update is a hard failure:
 
 ```bash
-sudo -u freemap sudo -n -l | grep -E "photon|find"
+sudo -u freemap sudo -n -l | grep photon
 ```
 
 ## 7. First run, by hand
@@ -312,5 +306,4 @@ After step 7, side `a` still holds the old index untouched, so pointing
 - `photon-1.2.1.jar`, the pre-migration `photon.service` and
   `nginx-photon.conf` are gitignored, so they stay put and out of `git status`.
 - `nginx-photon.conf` is installed separately at `/etc/nginx/conf.d/`; it holds
-  the `limit_req_zone` and `proxy_cache_path` the vhost depends on and is not
-  managed by this checkout.
+  the `limit_req_zone` the vhost depends on and is not managed by this checkout.

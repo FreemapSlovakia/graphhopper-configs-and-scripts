@@ -239,8 +239,7 @@ freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
   /bin/systemctl enable --now graphhopper@a, /bin/systemctl enable --now graphhopper@b, \
   /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b, \
   /bin/systemctl enable --now photon@a, /bin/systemctl enable --now photon@b, \
-  /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b, \
-  /usr/bin/find /fm/data4/nginx-proxy-cache/photon -mindepth 1 -delete
+  /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b
 ```
 
 ### 6. Install and enable units

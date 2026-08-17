@@ -132,19 +132,8 @@ swap_symlink "./photon-upstream.${next}.conf" ./photon-upstream.conf \
 
 sudo -n /bin/systemctl reload nginx || hard_fail "nginx reload failed"
 
-# The vhost caches responses for 24h, so without this the old index keeps being
-# served from cache long after the switchover. nginx writes the cache as
-# www-data with mode 700, so this needs sudo — the sudoers entry has to match
-# this argv exactly, PHOTON_CACHE_DIR included.
-cache_note="NOT purged — PHOTON_CACHE_DIR unset"
-if [ -n "${PHOTON_CACHE_DIR:-}" ]; then
-  cache_note="purged"
-  echo "Purging the nginx proxy cache at $PHOTON_CACHE_DIR"
-  if ! sudo -n /usr/bin/find "$PHOTON_CACHE_DIR" -mindepth 1 -delete; then
-    cache_note="NOT purged — stale results may be served for up to 24h"
-    echo "WARNING: could not purge $PHOTON_CACHE_DIR" >&2
-  fi
-fi
+# No proxy cache to purge: the vhost serves every request from the instance the
+# symlink above points at, so the switchover takes effect on the reload.
 
 # Only now is this index really in service.
 echo "$md5_line" > run/photon.md5
@@ -160,6 +149,5 @@ Photon geocoding data was updated successfully on ${host} at $(date).
   instance:  ${active} -> ${next}
   dump:      ${md5_line}
   languages: ${PHOTON_LANGUAGES}
-  cache:     ${cache_note}
 EOF
 echo "Success"

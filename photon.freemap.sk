@@ -14,19 +14,16 @@ server {
 		limit_req zone=photon_req burst=40 nodelay;
 		limit_req_status 429;
 
-		# The index only changes on re-import, so responses stay valid for a day.
-		# Clear /fm/data4/nginx-proxy-cache/photon after every re-import.
-		proxy_cache PHOTON;
-		proxy_cache_key $request_uri;
-		proxy_cache_valid 200 24h;
-		proxy_cache_lock on;
-		proxy_cache_use_stale error timeout updating;
-		add_header X-Cache-Status $upstream_cache_status;
-
-		# The cache key is the URI alone, but photon falls back to the
-		# Accept-Language header when ?lang= is absent — hiding the header
-		# keeps one clients language out of anothers cached response.
-		proxy_set_header Accept-Language "";
+		# Deliberately uncached. A proxy_cache here returned 8.5% hits on real
+		# /api traffic, saving ~20ms each — a few seconds of Photon CPU a day
+		# against a 59 GB mmap'd index that answers in 13-27ms uncached. It cost
+		# more than it saved: a monitor on a fixed URL got a HIT and went green
+		# whether or not Photon was alive, proxy_cache_use_stale hid real
+		# outages, the switchover had to purge it through a sudoers rule, and
+		# keying on $request_uri meant blanking Accept-Language so one client's
+		# language could not leak into another's cached response. Revisit if
+		# traffic grows by an order of magnitude; abuse is limit_req's job, not
+		# the cache's.
 
 		# Which instance serves traffic. photon-update.sh flips this symlink
 		# between photon-upstream.{a,b}.conf and reloads nginx.
