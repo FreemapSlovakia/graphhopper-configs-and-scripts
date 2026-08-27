@@ -6,6 +6,10 @@ server {
 	error_log /var/log/nginx/error_graphhopper.log warn;
 
 	location / {
+		# `/match` takes the whole track as one POST body, and nginx's stock 1 MiB
+		# turns a long recording into a 413 in its own HTML.
+		client_max_body_size 8m;
+
 		proxy_pass http://localhost:9989/;
 	}
 
