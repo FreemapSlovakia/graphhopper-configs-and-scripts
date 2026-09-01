@@ -1,0 +1,16 @@
+// Hiking for someone who does not want to scramble, on top of hike.json +
+// foot_elevation.json. The SAC scale is the whole point: T1–T2 walking, T3
+// only where nothing else connects, T4 and up (alpine, exposure, hands) out.
+//
+// The slope bands are graded for the same reason the ratings are: 25 % is a
+// scramble whatever the tags say, 15 % is merely hard work. `max_slope` is the
+// steepest stretch of an edge rather than its average, and the import samples
+// long edges so that there is something for it to find.
+{
+  "priority": [
+    { "if": "hike_rating >= 4", "multiply_by": "0" },
+    { "else_if": "hike_rating == 3", "multiply_by": "0.15" },
+    { "if": "max_slope > 25 || max_slope < -25", "multiply_by": "0.3" },
+    { "else_if": "max_slope > 15 || max_slope < -15", "multiply_by": "0.7" }
+  ]
+}

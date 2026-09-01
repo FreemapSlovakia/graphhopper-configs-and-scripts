@@ -1,0 +1,32 @@
+// E-bike, on top of bike.json — and instead of bike_elevation.json, whose
+// penalties assume legs: the assist flattens the terrain, so a climb costs
+// speed rather than being avoided. Faster than the encoded bike speed on the
+// flat, then capped at the 25 km/h the motor cuts out at.
+//
+// The cap is lifted on a descent: the motor stops helping at 25, the bike does
+// not stop rolling, and capping there would have thrown away the speed-up that
+// bike_elevation.json gives every other bike profile downhill.
+//
+// The two 6 km/h limits are bike.json's, for pushing the bike the wrong way up
+// a one-way or through a private way. The blanket 1.35 above would otherwise
+// raise them to 8.1, so they are re-applied last, where nothing undoes them.
+//
+// One priority clause, borrowed from a published e-bike model: past 20 % the
+// assist has run out and it is a push whatever the motor is rated at, so a ramp
+// that steep is worth going round rather than merely being slow on. The climb
+// only — `max_slope` flips sign with direction, and a 20 % descent is a
+// question of brakes, not of effort.
+{
+  "priority": [{ "if": "max_slope > 20", "multiply_by": "0.4" }],
+  "speed": [
+    { "if": "true", "multiply_by": "1.35" },
+    { "if": "average_slope >= 15", "limit_to": "8" },
+    { "else_if": "average_slope >= 10", "limit_to": "13" },
+    { "else_if": "average_slope >= 5", "multiply_by": "0.9" },
+    { "else_if": "average_slope <= -4", "multiply_by": "1.05" },
+    { "if": "average_slope > -4", "limit_to": "25" },
+    { "else": "", "limit_to": "35" },
+    { "if": "!bike_access && backward_bike_access", "limit_to": "6" },
+    { "if": "bike_road_access == PRIVATE || bike_road_access == DESTINATION", "limit_to": "6" }
+  ]
+}

@@ -1,0 +1,46 @@
+// A pram or a wheelchair, on top of foot.json + foot_elevation.json. What it
+// blocks it blocks outright — a step is not a detour, it is impassable — so a
+// destination behind one is unroutable, which is the honest answer.
+//
+// `max_slope` rather than `average_slope`: a path that averages 5 % is no use
+// if it does so with a 15 % ramp in the middle. It is signed and flips with
+// direction, so both signs are named to cover the descent as well. The import
+// runs long edge sampling for this; without it `max_slope` collapses to
+// `average_slope` on any way OSM maps with no intermediate nodes, which is
+// most of the long ones.
+//
+// Two tiers rather than one flat block. Above 12 % nothing on wheels with a
+// passenger in it is going up, so that stays absolute. Between 8 and 12 % it
+// is a question of who is pushing, and one bad DEM cell should cost a detour
+// rather than sever the graph — 0.05 is heavy enough that the band is only
+// entered when there is no alternative. 8 % is where the accessibility
+// standards put a ramp's limit.
+//
+// The speed block is about arrival times, not route choice. foot.json gives
+// every surface walking pace and foot_elevation.json only slows for gradient,
+// so without it a pram crosses cobbles as fast as it crosses asphalt.
+//
+// Nothing here about `hike_rating`: foot.json already blocks anything at 2 or
+// above, which is every value a pram would care about.
+{
+  "priority": [
+    { "if": "road_class == STEPS", "multiply_by": "0" },
+    { "if": "max_slope > 12 || max_slope < -12", "multiply_by": "0" },
+    { "else_if": "max_slope > 8 || max_slope < -8", "multiply_by": "0.05" },
+    {
+      "if": "surface == GROUND || surface == DIRT || surface == GRASS || surface == SAND",
+      "multiply_by": "0.15"
+    },
+    { "if": "surface == COBBLESTONE", "multiply_by": "0.3" },
+    {
+      "if": "smoothness == BAD || smoothness == VERY_BAD || smoothness == HORRIBLE || smoothness == VERY_HORRIBLE || smoothness == IMPASSABLE",
+      "multiply_by": "0.1"
+    }
+  ],
+  "speed": [
+    {
+      "if": "surface == COBBLESTONE || surface == GROUND || surface == DIRT || surface == GRASS || surface == SAND",
+      "limit_to": "3"
+    }
+  ]
+}

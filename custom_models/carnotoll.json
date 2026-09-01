@@ -1,0 +1,36 @@
+// Car avoiding what costs money, on top of car.json: the vignette motorways of
+// this region and the tolled passes, tunnels and bridges a vignette does not
+// cover. `toll` is ALL where anyone pays and HGV where only lorries do, so a
+// car reads the former alone.
+//
+// Blocked, not penalised. A priority multiplies an edge's travel time, so it
+// can only ever express a cost per kilometre, and neither toll here is one: a
+// vignette is a flat fee and a bridge toll is per crossing. Any finite value
+// therefore buys detours proportional to the length of the tolled link rather
+// than to what it costs — 0.02, against car.json's `distance_influence: 90`,
+// was worth roughly ten times the distance. "Avoid tolls" is taken to mean
+// avoid, so a destination reachable only across a tolled bridge returns no
+// route. That is at least an honest answer.
+//
+// Where a way carries no `toll` tag GraphHopper fills the value in from the
+// country (OSMTollParser.getCountryDefault). Slovak motorways and the R
+// expressways come out ALL however OSM tags them, and the toll-free D1/D2
+// sections keep the `toll=no` the tag wins with. German motorways come out
+// HGV, so a `road_class == MOTORWAY` clause would have been wrong here and
+// `toll` alone is right.
+//
+// Austria is the hole in that table: it is absent, so its ways default to NO,
+// its vignette is not tagged `toll=*` in OSM, and the extract covers the
+// country — hence the second clause. Autobahnen and Schnellstraßen are both
+// `highway=motorway` there, which is the vignette's scope; `highway=trunk` is
+// not, so it stays out. The Austrian tunnel tolls (Brenner, Tauern, Arlberg,
+// Karawanken) are tagged and the first clause already has them.
+{
+  "priority": [
+    { "if": "toll == ALL", "multiply_by": "0" },
+    {
+      "if": "country == AUT && road_class == MOTORWAY",
+      "multiply_by": "0"
+    }
+  ]
+}
