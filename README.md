@@ -233,28 +233,50 @@ see [Building the jar](#building-the-jar).
 
 ## Building the jar
 
-`graphhopper-web-11.0.jar` is **not** the official release jar. The `sonny`
-elevation provider was added in
+`graphhopper-web-11.0.jar` is **not** the official release jar. Two commits are
+cherry-picked onto the 11.0 tag.
+
+The `sonny` elevation provider was added in
 [#3183](https://github.com/graphhopper/graphhopper/pull/3183) on 2025-11-12,
-four weeks after 11.0 was tagged, and is still unreleased — as of 2026-08, 11.0
+four weeks after 11.0 was tagged, and is still unreleased — as of 2026-09, 11.0
 remains the newest release and the commit exists only on `master`
 (`12.0-SNAPSHOT`). The stock jar aborts the import with
 `IllegalArgumentException: Did not find elevation provider: sonny`.
 
+The second, [#3235](https://github.com/graphhopper/graphhopper/pull/3235) of
+2025-12-02, is one line: elevation sampling skips ferries. It matters because
+`graph.elevation.long_edge_sampling_distance` is set, and `limit.geojson`
+reaches every sea Europe has — Adriatic, Baltic, North Sea, Aegean, the Channel
+— so without it every ferry way in the graph collects a point per 60 m.
+
 Rather than run `12.0-SNAPSHOT` — ten months of unreleased changes, including
 `CustomWeighting` returning 10× its previous values and country rules moving
-into parsers — the release is used with that one commit cherry-picked. It
-applies cleanly: 11.0 already has the `AbstractSRTMElevationProvider`
-constructor it builds on, and the PR only adds two self-contained classes plus
-four lines of dispatch in `GraphHopper.java`.
+into parsers — the release is used with those two commits cherry-picked. Both
+apply cleanly: 11.0 already has the `AbstractSRTMElevationProvider` constructor
+#3183 builds on, and the PR only adds two self-contained classes plus four lines
+of dispatch in `GraphHopper.java`, while #3235 is a single condition in
+`OSMReader`.
 
 ```bash
 git clone https://github.com/graphhopper/graphhopper.git
 cd graphhopper
-git checkout -b 11.0-sonny 11.0
-git cherry-pick 25903cd0c6cfd23e1e72da71900b26dc2cfc362f    # #3183
+git checkout -b 11.0-sonny-ferry 11.0
+git cherry-pick 25903cd0c6cfd23e1e72da71900b26dc2cfc362f    # #3183 sonny provider
+git cherry-pick 75fb59df438bf6e536da51f4e453ad978149f355    # #3235 skip ferries
 mvn -DskipTests -pl web -am package
-unzip -l web/target/graphhopper-web-11.0-SNAPSHOT.jar | grep SonnyProvider   # sanity check
+```
+
+Check both landed. A jar silently missing either is the expensive failure: the
+import does not complain, it just aborts on `sonny` or quietly fattens every
+ferry line.
+
+```bash
+J=web/target/graphhopper-web-11.0-SNAPSHOT.jar
+unzip -l "$J" | grep SonnyProvider
+unzip -p "$J" com/graphhopper/reader/osm/OSMReader.class > /tmp/OSMReader.class
+javap -p -c /tmp/OSMReader.class \
+  | awk '/getLongEdgeSamplingDistance/{f=1} f{print} /EdgeSampling.sample/{if(f)exit}' \
+  | grep isFerry     # must print a line; empty means #3235 is missing
 ```
 
 The tag's pom says `11.0-SNAPSHOT`, so the artifact has to be renamed to

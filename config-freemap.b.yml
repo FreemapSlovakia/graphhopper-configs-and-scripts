@@ -59,6 +59,28 @@ graphhopper:
     - name: motorcycle
       custom_model_files: [motorcycle.json, curvature.json]
 
+    # Ours, from custom_models/. A file there may not be named after a built-in
+    # one — GraphHopper resolves the jar's copy first and then refuses the
+    # duplicate — so each is named after its profile.
+
+    - name: carnotoll
+      turn_costs:
+        vehicle_types: [motorcar, motor_vehicle]
+        u_turn_costs: 60
+      custom_model_files: [car.json, carnotoll.json]
+
+    - name: ebike
+      custom_model_files: [bike.json, ebike.json]
+
+    - name: gravelbike
+      custom_model_files: [bike.json, bike_elevation.json, gravelbike.json]
+
+    - name: stroller
+      custom_model_files: [foot.json, foot_elevation.json, stroller.json]
+
+    - name: easyhike
+      custom_model_files: [hike.json, foot_elevation.json, easyhike.json]
+
   #    # See the bus.json for more details.
   #    - name: bus
   #       turn_costs:
@@ -70,7 +92,11 @@ graphhopper:
   #   See ./core/src/main/resources/com/graphhopper/custom_models and let us know if you customize them, improve them or create new onces!
   #   Also there is the curvature.json custom model which might be useful for a motorcyle profile or the opposite for a truck profile.
   #   Then specify a folder where to find your own custom model files:
-  #  custom_models.directory: custom_models
+  #
+  # Not custom_models/ itself: the models are part of what a profile's stored
+  # hash is checked against, so an instance has to read the copy frozen beside
+  # its graph rather than the template this line lives in. See freeze-config.sh.
+  custom_models.directory: run/instance.b/custom_models
 
   # Speed mode:
   # It's possible to speed up routing by doing a special graph preparation (Contraction Hierarchies, CH). This requires
@@ -87,6 +113,23 @@ graphhopper:
     - profile: racingbike
     - profile: mtb
     - profile: motorcycle
+    - profile: carnotoll
+    - profile: ebike
+    - profile: gravelbike
+    - profile: stroller
+    - profile: easyhike
+
+  # There is no sharing a contraction between profiles (unlike the landmarks
+  # below), so each one above is contracted in full — but they are independent,
+  # and the default of 1 runs them one after another. Threads trade the import's
+  # RAM for its wall clock, and what scales with this number is the per-job
+  # working set rather than the graph, which MMAP keeps on disk. 2 by report
+  # rather than by record: this line was commented out until now, so every
+  # import git knows about ran at the default of 1, and the ~34 GiB peak on
+  # record is a one-thread, eight-profile number. Watch the first thirteen-
+  # profile import before going higher. car, car4wd and carnotoll carry turn
+  # costs, whose edge-based contraction is the expensive kind.
+  prepare.ch.threads: 2
 
   # Hybrid mode:
   # Similar to speed mode, the hybrid mode (Landmarks, LM) also speeds up routing by doing calculating auxiliary data
@@ -113,9 +156,7 @@ graphhopper:
 
   #### Speed, hybrid and flexible mode ####
 
-  # To make CH preparation faster for multiple profiles you can increase the default threads if you have enough RAM.
-  # Change this setting only if you know what you are doing and if the default worked for you.
-  # prepare.ch.threads: 1
+  # `prepare.ch.threads` is set beside `profiles_ch` above.
 
   # To tune the performance vs. memory usage for the hybrid mode use
   # prepare.lm.landmarks: 16
@@ -158,15 +199,44 @@ graphhopper:
   # window size in meter along a way used for averaging a node's elevation
   # graph.elevation.edge_smoothing.moving_average.window_size: 150
 
-  # Long edge sampling is deliberately left off. Our elevation-aware profiles
-  # weight on `average_slope`, which GraphHopper computes from the two tower
-  # nodes of an edge and its length, so extra sampled pillar nodes do not change
-  # it. They would only cost graph size.
-  # - first, set the distance (in meters) at which elevation samples should be taken on long edges
-  # graph.elevation.long_edge_sampling_distance: 60
-  # - second, set the elevation tolerance (in meters) to use when simplifying polylines since the default ignores
-  #   elevation and will remove the extra points that long edge sampling added
-  # graph.elevation.way_point_max_distance: 10
+  # Long edge sampling, on for the sake of `max_slope`. `average_slope` comes
+  # from an edge's two tower nodes and its length, so sampling cannot change it,
+  # but SlopeCalculator derives `max_slope` by walking the pillar nodes — and a
+  # long way that OSM maps without intermediate nodes has none, so `max_slope`
+  # collapses to `average_slope` and the mid-edge ramp stroller.json and
+  # easyhike.json look for is invisible. A point every 60 m gives them something
+  # to see; below ~30 m there is no new information anyway, since that is the
+  # Sonny cell.
+  #
+  # Requires the jar built per README "Building the jar", which cherry-picks
+  # #3235 alongside the sonny provider. Stock 11.0 samples ferries too, and
+  # limit.geojson reaches the Adriatic, the Baltic, the North Sea, the Aegean
+  # and the Channel, so every ferry way in the graph would collect a point per
+  # 60 m. Nothing here can detect a jar missing that commit — the import will
+  # not complain, it will just produce a fatter graph — so the check lives in
+  # that README section and has to be run at every jar bump.
+  graph.elevation.long_edge_sampling_distance: 60
+
+  # Below this the simplification pass drops a sampled point again for lying in
+  # line with its neighbours. The unit is metres of *elevation*, not of ground
+  # distance: RamerDouglasPeucker scales the vertical by maxWayPointDistance
+  # divided by this, so a point survives exactly when it sits more than this
+  # many metres off the chord. Unset it is Double.MAX_VALUE — elevation ignored
+  # — and the 2D pass would throw away everything sampled above. Upstream
+  # suggests 10, which keeps only 10 m bulges and so is far coarser than any
+  # ramp worth routing around; 2 sits just above Sonny's vertical error and
+  # keeps real structure without storing DEM jitter.
+  #
+  # Do not relax it to buy that back. At 5 the 150 m footway that is flat for
+  # 100 m and then climbs at 8 % — the case stroller.json exists for — loses the
+  # point at the foot of the ramp, which sits only 2.7 m off the chord, and
+  # max_slope falls back to the 2.7 % average. 8 % ramps are the whole signal.
+  #
+  # The same key also sets the response geometry tolerance, so route polylines
+  # get denser for every profile, including the ten that never read a slope. A
+  # request can override it with elevation_way_point_max_distance, which is the
+  # place to claw it back if the payloads bite.
+  graph.elevation.way_point_max_distance: 2
 
   #### Country-dependent defaults for max speeds ####
 
