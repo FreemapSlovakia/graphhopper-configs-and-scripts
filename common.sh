@@ -218,6 +218,40 @@ swap_symlink() { # target, linkname
   ln -sfn "$1" "$2.new" && mv -Tf "$2.new" "$2"
 }
 
+# Held for a whole run, against deploy.sh, which takes the same lock before it
+# pulls. systemd already stops two runs of one unit overlapping; what this keeps
+# out is a `git pull` landing mid-run, which would move the config templates
+# under an import and rewrite the running script while bash is still reading it.
+#
+# A function rather than something this file does on its own, because it has to
+# run after the caller has sourced its config: soft_fail mails, and notify.sh
+# needs the MAILGUN_* that come from there. `exec 9>` inside a function still
+# affects the caller's fd table, so the lock spans the rest of the run.
+#
+# Waited on rather than skipped, and reported when the wait runs out. A deploy
+# holds this for a freeze and a fetch — seconds — so ten minutes means it is
+# stuck, and exiting 0 on a busy lock would let that quietly stall every run
+# from then on, with the data going stale and nothing ever saying so.
+#
+# deploy.sh cannot source this file (doing so prints ---BEGIN---, installs the
+# EXIT trap and exits on run/halted), so it opens the same path on the same fd
+# by hand. Both ends of that contract have to change together.
+#
+# Known and accepted: the caller has to source this file and its config before
+# it can call this, so a pull landing in that window — git replaces a working
+# tree file by unlink-then-create — could still make one of those sources fail,
+# before the EXIT trap exists to explain it. Milliseconds wide, and the cost is
+# one run dying with an abrupt-death mail and the timer retrying in an hour.
+# Closing it would mean taking the lock bare beforehand and upgrading to the
+# reporting form after, which is more machinery than the risk is worth.
+readonly UPDATE_LOCK=run/update.lock
+take_update_lock() { # optional seconds to wait, default 600
+  local wait_s="${1:-600}"
+  exec 9>"$UPDATE_LOCK"
+  flock -w "$wait_s" 9 \
+    || soft_fail "$UPDATE_LOCK still held after $((wait_s / 60)) minutes — a deploy is stuck, or something else is holding it"
+}
+
 # Download to run/, resuming only a partial file that belongs to this same
 # remote object, and verify it. The target is always run/<basename of the URL>,
 # because wget -P is used rather than -O: -O with -c does not resume reliably.

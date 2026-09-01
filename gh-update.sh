@@ -16,11 +16,26 @@ set -a
 source ./gh-update.conf
 set +a
 
+# Against deploy.sh — see take_update_lock in common.sh. Here rather than in
+# common.sh's own body because it may need to mail, and the addresses only exist
+# once the config above has been sourced.
+take_update_lock
+
+# A deadline rather than a number of tries, because a try is not a fixed length:
+# while the port still refuses connections curl returns at once and an iteration
+# is just the sleep, but once it is bound and slow the same iteration costs the
+# 10 s timeout too. The 60 tries this carried for eight profiles were therefore
+# anywhere from 5 to 15 minutes. 15 gives the first /route room to wait on a
+# cold mmap of thirteen contractions and denser sampled geometry, and means one
+# thing however it fails. Overshooting does not merely retry — it disables a
+# freshly imported instance that was only slow, and halts the schedule. As in
+# Photon, the cost of being generous is only how long a genuinely dead instance
+# takes to be declared so.
 wait_for_gh_ready() {
   local port="$1"
-  local http_code
+  local http_code deadline=$((SECONDS + 900))
 
-  for _ in $(seq 1 60); do
+  while [ "$SECONDS" -lt "$deadline" ]; do
     http_code="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/route" \
       -H 'Content-Type: application/json' \
       --data-raw '{"profile":"car","points":[[20.778408050524682,49.005743088335926],[20.795849427570825,49.00523635421394]]}' \
@@ -81,9 +96,21 @@ echo "Importing: $next"
 resolve_data_dir "graph-cache.${next}"
 cache_dir="$data_dir"
 assert_instance_idle "graphhopper@${next}"
+
+# The instance is idle and about to be rebuilt, so this is the moment the config
+# and the models its graph will be built from get pinned to it for good. Both
+# the import below and graphhopper@${next} then read the freeze, never the
+# templates, so a pull landing later cannot leave the two disagreeing.
+#
+# Before the cache is cleared rather than after: if this fails there is no
+# reason to have already destroyed the graph that was the thing to fall back on.
+./freeze-config.sh "$next" \
+  || hard_fail "Could not freeze the config for instance ${next}"
+
 { mkdir -p "$cache_dir" && find "$cache_dir" -mindepth 1 -delete; } \
   || hard_fail "Could not clear the graph cache at $cache_dir"
-java -Xms2g -Xmx64g -jar graphhopper-web-11.0.jar import config-freemap.${next}.yml \
+
+java -Xms2g -Xmx64g -jar graphhopper-web-11.0.jar import "run/instance.${next}/config.yml" \
   || hard_fail "GraphHopper import into instance ${next} failed"
 
 echo "Starting: $next"

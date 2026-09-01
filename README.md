@@ -14,6 +14,8 @@ import into the idle instance, health-check it, flip nginx, retire the old one
 | `common.sh`        | Shared scaffolding: failure classification, halting, retries, downloads |
 | `gh-update.sh`     | GraphHopper: OSM extract → import → switchover                          |
 | `photon-update.sh` | Photon: JSONL dump → import → switchover                                |
+| `freeze-config.sh` | Pins a config and custom models to the graph being built                |
+| `deploy.sh`        | `git pull` that waits for the gap between imports                       |
 | `notify.sh`        | Sends one Mailgun email (subject + body on stdin, or `--abrupt`)        |
 
 The repository is checked out **twice** on the server, at `/opt/graphhopper`
@@ -33,6 +35,8 @@ State kept between runs in `run/`, where `<x>` is `osm` or `photon`:
 | `<x>-mismatch.md5`    | Checksum that already failed verification once               |
 | `fail-streak`         | Consecutive recoverable failures                             |
 | `halted`              | Present = every run exits immediately until it is removed    |
+| `instance.{a,b}/`     | The config and custom models that instance's graph was built from |
+| `update.lock`         | Held by a run, and by `deploy.sh` while it pulls              |
 
 ## Photon
 
@@ -99,10 +103,113 @@ fires on `OnFailure=` but stays quiet whenever `$MONITOR_SERVICE_RESULT` is
 2. If `run/halted` exists, the run exits immediately.
 3. Script checks if new OSM data is available; exits silently if not.
 4. If yes, downloads the extract (resuming a partial one) and verifies its checksum.
-5. Imports the data into the inactive instance (`a` or `b`).
-6. Starts the new instance via systemd and polls until it is healthy.
-7. Switches nginx to the new instance and stops the old one.
-8. Emails the result.
+5. Freezes `config-freemap.<i>.yml` and `custom_models/` into `run/instance.<i>/`.
+6. Imports the data into the inactive instance (`a` or `b`), from that freeze.
+7. Starts the new instance via systemd and polls until it is healthy.
+8. Switches nginx to the new instance and stops the old one.
+9. Emails the result.
+
+## Deploying a config change
+
+Edit `config-freemap.{a,b}.yml` or `custom_models/` here, push, and on the
+server:
+
+```bash
+sudo -u freemap /opt/graphhopper/deploy.sh
+```
+
+Any time — it waits for the gap between imports by itself and needs no
+watching. The change takes effect on the next import, one instance at a time,
+and the live instance is not touched.
+
+It uses no sudo of its own, but it must run as the user that owns the checkout,
+because the updater has to be able to replace what it writes; it refuses to
+start otherwise. The one `sudo` above prompts once, before the wait, so the run
+can be left in `tmux` without a second prompt appearing hours later. Logging in
+as `freemap` does as well, if going through sudo is not wanted.
+
+The same script serves `/opt/photon`. It tells the two checkouts apart by which
+`*-update.conf` sits beside it, takes the per-instance freezes only for
+GraphHopper, and refuses to finish quietly if the pull left `<service>@.service`
+differing from the copy installed under `/etc/systemd/system` — an instance left
+on the old `ExecStart` still reads the templates, which is the one failure all
+of this exists to prevent.
+
+Do not `git pull` directly. GraphHopper checks every profile's stored hash when
+it loads a graph, and that hash covers the custom model's contents, so a config
+that has moved on from the graph beside it will not start. Since the unit is
+`Restart=on-failure`, a pull under a live instance means it never comes back
+from its next crash. And bash reads a script as it runs it, so a pull that lands
+mid-import can leave `gh-update.sh` executing the tail of a different file.
+
+`deploy.sh` avoids both by taking the lock `gh-update.sh` holds for the whole of
+a run, and by freezing what is running now before the templates move. Nothing
+reads the templates directly — an instance reads `run/instance.<i>/`, written
+when its graph was built, which is why the two can never disagree.
+
+### Migrating an install that predates the freeze
+
+Once, on a checkout whose `gh-update.sh` does not take the lock yet, so this is
+the one deployment that has to wait the hard way.
+
+Run the whole block **as root**, in `tmux`, and leave it — the loop does the
+waiting. Root because none of the timer and unit commands here are in the
+passwordless sudoers set, and a `sudo` partway down would sit at a password
+prompt hours later with nobody there to answer it. The file operations drop
+back to the service user with `runuser`, so nothing in the checkout ends up
+owned by root.
+
+```bash
+systemctl stop gh-update.timer
+
+# Not `systemctl is-active`: gh-update.service is Type=oneshot with no
+# RemainAfterExit, so while its ExecStart is running the unit sits in
+# `activating`, which is-active reports as false. The loop would fall straight
+# through into a live import — the one thing this block exists to avoid.
+while :; do
+  state="$(systemctl show -p ActiveState --value gh-update.service)"
+  case "$state" in inactive | failed) break ;; esac
+  sleep 60
+done
+
+cd /opt/graphhopper
+
+# What the live instance is running on, captured before the pull moves it.
+# freeze-config.sh is not here yet, hence by hand. The live side only: the idle
+# one's graph came from an older generation of these templates, so freezing
+# today's for it would assert a match nobody established, and the next import
+# rebuilds that side from scratch regardless.
+#
+# Which side is live comes from the nginx symlink, as it does in both updaters —
+# where traffic actually goes, not which units are enabled. Unit state would be
+# wrong here: an instance reads as inactive through every RestartSec hold.
+#
+# ONCE, and only before the pull. Run after it and these two lines would copy
+# the new templates over a live instance's freeze — the very thing the freeze
+# exists to prevent.
+live="$(readlink graphhopper.freemap.sk)"; live="${live##*.}"
+case "$live" in a | b) ;; *) echo "no live instance found: $live" >&2; exit 1 ;; esac
+runuser -u freemap -- mkdir -p "run/instance.$live/custom_models"
+runuser -u freemap -- cp "config-freemap.$live.yml" "run/instance.$live/config.yml"
+
+runuser -u freemap -- git pull --ff-only
+
+# daemon-reload restarts nothing, so the live instance keeps its old command
+# line until it next stops — and when it does come back it reads the freeze
+# above, which still matches the graph it has.
+install -m644 graphhopper@.service /etc/systemd/system/
+systemctl daemon-reload
+
+systemctl start gh-update.timer
+```
+
+Check first that the pull will not want anything typed at it:
+
+```bash
+runuser -u freemap -- git -C /opt/graphhopper fetch --dry-run
+```
+
+From here on it is `deploy.sh`, whenever, unattended.
 
 ## Elevation
 
@@ -249,11 +356,17 @@ freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
 ```bash
 cp graphhopper@.service gh-update.service gh-update.timer gh-update-abort.service \
   /etc/systemd/system/
-chmod +x gh-update.sh notify.sh
+chmod +x gh-update.sh notify.sh freeze-config.sh deploy.sh
 systemctl daemon-reload
 
 # Start whichever graphhopper instance is currently active (e.g. a).
 # The update script will enable/disable instances automatically on each update.
+#
+# It needs a freeze first — ExecStartPre asserts one rather than inventing it,
+# so an instance with no run/instance.<i>/ will not start. Creating it from
+# today's templates is only honest if this graph was built from this checkout;
+# if the graph came from a backup, restore its freeze alongside it instead.
+sudo -u freemap ./freeze-config.sh a
 systemctl enable --now graphhopper@a.service
 
 # Enable the timer (replaces cron)

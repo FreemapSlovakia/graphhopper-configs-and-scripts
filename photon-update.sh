@@ -16,14 +16,27 @@ set -a
 source ./photon-update.conf
 set +a
 
+# Against deploy.sh — see take_update_lock in common.sh. deploy.sh takes this
+# lock in whichever checkout it is run from, so without it here a deploy in
+# /opt/photon would sail through and rewrite this script mid-run.
+take_update_lock
+
 # Opening a ~60G OpenSearch index takes appreciably longer than GraphHopper's
-# mmap'd graph, so allow 10 minutes rather than 5. The only cost of being
-# generous here is how long a genuinely dead instance takes to be declared so.
+# mmap'd graph. A deadline rather than a number of tries, for the reason spelled
+# out in gh-update.sh: while the port still refuses connections curl returns at
+# once and an iteration is only the sleep, but once it is bound and slow the
+# 10 s timeout is added to every one. So the 120 tries this used to count were
+# 10 minutes in the first case and 30 in the second — and the second is exactly
+# the branch a large index opening slowly takes. 30 minutes is therefore the
+# ceiling to keep, not the 10 the old comment claimed. The only cost of being
+# generous is how long a genuinely dead instance takes to be declared so;
+# undershooting costs a good instance, since overrunning means
+# `disable --now photon@next` and a halted schedule.
 wait_for_photon_ready() {
   local port="$1"
-  local body
+  local body deadline=$((SECONDS + 1800))
 
-  for _ in $(seq 1 120); do
+  while [ "$SECONDS" -lt "$deadline" ]; do
     body="$(curl -sS --max-time 10 "http://127.0.0.1:${port}/api?q=bratislava&limit=1" || true)"
 
     # An index that is open but empty answers 200 with an empty feature list,

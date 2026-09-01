@@ -1,12 +1,28 @@
 [Unit]
 Description=GraphHopper routing server (instance %i)
 After=network.target
+# Deliberately no StartLimitIntervalSec/StartLimitBurst. With RestartSec=30 the
+# default of five starts in ten seconds can never trip, so a permanently failing
+# ExecStartPre retries forever and the unit never reads as `failed` — untidy,
+# but nothing here consumes `systemctl is-failed` anyway. A limit would buy that
+# tidiness by capping the restarts of a *serving* instance: three crashes and it
+# stays down for good, where today a transient JVM death self-heals. For the one
+# process fronting the routing traffic that is the wrong trade. The gap this
+# leaves — a live instance dying hours after its import, with nothing to mail
+# about it — predates the freeze work and wants an OnFailure= of its own.
 
 [Service]
 Type=simple
 User=freemap
 WorkingDirectory=/opt/graphhopper
-ExecStart=java -Xms1g -Xmx4g -jar graphhopper-web-11.0.jar server config-freemap.%i.yml
+# Restart=on-failure below means this config is re-read on every restart, for as
+# long as this graph is in service — so it must be the freeze that was taken
+# when the graph was built, never the template. Asserted, not repaired: getting
+# here without a freeze means the graph and the templates have already parted
+# company, and writing one from today's templates would invent an answer nobody
+# checked — once every RestartSec, indefinitely. Fail loudly instead.
+ExecStartPre=/opt/graphhopper/freeze-config.sh --check %i
+ExecStart=java -Xms1g -Xmx4g -jar graphhopper-web-11.0.jar server run/instance.%i/config.yml
 Restart=on-failure
 RestartSec=30
 
