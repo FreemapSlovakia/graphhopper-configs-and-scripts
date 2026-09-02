@@ -1,46 +1,119 @@
-// A pram or a wheelchair, on top of foot.json + foot_elevation.json. What it
-// blocks it blocks outright — a step is not a detour, it is impassable — so a
-// destination behind one is unroutable, which is the honest answer.
+// A pram or a wheelchair, on top of foot.json + foot_elevation.json.
 //
 // `max_slope` rather than `average_slope`: a path that averages 5 % is no use
 // if it does so with a 15 % ramp in the middle. It is signed and flips with
-// direction, so both signs are named to cover the descent as well. The import
-// runs long edge sampling for this; without it `max_slope` collapses to
-// `average_slope` on any way OSM maps with no intermediate nodes, which is
-// most of the long ones.
+// direction, so every band below names both signs — a descent with a loaded
+// pram is a braking problem, not a free ride. The import runs long edge
+// sampling for this; without it `max_slope` collapses to `average_slope` on any
+// way OSM maps with no intermediate nodes, which is most of the long ones.
 //
-// Two tiers rather than one flat block. Above 12 % nothing on wheels with a
-// passenger in it is going up, so that stays absolute. Between 8 and 12 % it
-// is a question of who is pushing, and one bad DEM cell should cost a detour
-// rather than sever the graph — 0.05 is heavy enough that the band is only
-// entered when there is no alternative. 8 % is where the accessibility
-// standards put a ramp's limit.
+// ## Why a band per percent rather than a curve
+//
+// A gradient this gradual wants a continuous penalty, and 11.0 cannot express
+// one. `ValueExpressionVisitor` accepts only number literals, a *single*
+// encoded value, unary `-`, parentheses, `Math.sqrt` (`allowedMethods` is
+// literally `Set.of("sqrt")`, `allowedMethodParents` `Set.of("Math")`), and the
+// binary operators `*`, `+`, `-`. There is no `/`, no `Math.abs`, and
+// `.ordinal()` carries an explicit TODO as unsupported. `edge.getDistance()`
+// exists only on master.
+//
+// The killer is the range check: `findVariables` evaluates the expression at
+// `getMinStorableDecimal()` and `getMaxOrMaxStorableDecimal()` — nothing else —
+// and rejects a negative result, never consulting the enclosing `if`. For
+// `max_slope` those endpoints are -31 and 31, so a decreasing `a - b * slope`
+// needs `a >= 31b`; at `a = 1` the coefficient caps at 1/31 and 12 % still
+// scores 0.61. With one encoded value and no `abs`, symmetry in |slope| is
+// unreachable anyway.
+//
+// So the curve is tabulated instead. `max_slope` is stored with factor 1, i.e.
+// whole percent, so a band per percent is exactly the resolution the data has —
+// finer would be inventing precision, coarser would throw some away. 8 % is
+// where the accessibility standards put a ramp's limit and lands at 0.52; 12 %
+// is where a loaded pram stops going up at all and lands at 0.08.
+//
+// Nothing is a hard block, because slope here is DEM-derived and one bad cell
+// should cost a detour rather than sever the graph — 0.01 is entered only when
+// there is no alternative at all.
+//
+// ## Smoothness and surface
+//
+// Both are graded rather than lumped, because `bad` and `impassable` are not
+// the same claim. OSM defines the scale by what can use the way, and
+// `intermediate` is the rung that names a wheelchair explicitly — so that is
+// where a pram stops being unremarkable, and `impassable` ("no wheeled
+// vehicle") is the one value that earns an outright block. Like STEPS it is a
+// tag rather than a measurement, which is what makes a 0 honest there.
+//
+// The two compound: `surface=ground` with `smoothness=bad` lands at 0.25 × 0.4.
+// That is deliberate — upstream avoids double-penalising for bike *speed*
+// (#3302), but for a pram a rough surface and a rough tread really are two
+// separate problems.
+////
+// ## Why nothing here goes below ~0.06
+//
+// The three ladders multiply, and this is a CH profile. `CustomWeighting` gives
+// `weight = seconds / priority`, and `CHStorage` stores a shortcut weight as a
+// scaled int capped at `MAX_WEIGHT = (Integer.MAX_VALUE << 1) / 1000`, about
+// 4.29e6; past that `weightFromDouble` counts `numShortcutsExceedingWeight` and
+// returns the infinity marker, whose own comment warns of
+// connection-not-found. An earlier draft of this file floored at 0.01 x 0.02 x
+// 0.04 = 8e-6 with a 2 km/h speed cap — 225 000 weight per metre, overflowing a
+// shortcut after nineteen metres. The floors below keep the worst compounded
+// product at 0.06 x 0.08 x 0.15 = 7.2e-4, which at the 3 km/h floor is ~1670 per
+// metre and so survives a 2.5 km shortcut — the same headroom the previous
+// two-tier model had. Check `numShortcutsExceedingWeight` in the import log
+// before lowering any of them.
+//
+// A hard 0 is *not* the same hazard: infinity excludes the edge from
+// contraction outright, which is why STEPS and `impassable` stay at 0.
 //
 // The speed block is about arrival times, not route choice. foot.json gives
 // every surface walking pace and foot_elevation.json only slows for gradient,
-// so without it a pram crosses cobbles as fast as it crosses asphalt.
+// so without it a pram crosses sand as fast as it crosses asphalt.
 //
 // Nothing here about `hike_rating`: foot.json already blocks anything at 2 or
 // above, which is every value a pram would care about.
 {
   "priority": [
     { "if": "road_class == STEPS", "multiply_by": "0" },
-    { "if": "max_slope > 12 || max_slope < -12", "multiply_by": "0" },
-    { "else_if": "max_slope > 8 || max_slope < -8", "multiply_by": "0.05" },
-    {
-      "if": "surface == GROUND || surface == DIRT || surface == GRASS || surface == SAND",
-      "multiply_by": "0.15"
-    },
-    { "if": "surface == COBBLESTONE", "multiply_by": "0.3" },
-    {
-      "if": "smoothness == BAD || smoothness == VERY_BAD || smoothness == HORRIBLE || smoothness == VERY_HORRIBLE || smoothness == IMPASSABLE",
-      "multiply_by": "0.1"
-    }
+
+    { "if": "max_slope > 15 || max_slope < -15", "multiply_by": "0.06" },
+    { "else_if": "max_slope > 14 || max_slope < -14", "multiply_by": "0.07" },
+    { "else_if": "max_slope > 13 || max_slope < -13", "multiply_by": "0.09" },
+    { "else_if": "max_slope > 12 || max_slope < -12", "multiply_by": "0.11" },
+    { "else_if": "max_slope > 11 || max_slope < -11", "multiply_by": "0.16" },
+    { "else_if": "max_slope > 10 || max_slope < -10", "multiply_by": "0.24" },
+    { "else_if": "max_slope > 9 || max_slope < -9", "multiply_by": "0.34" },
+    { "else_if": "max_slope > 8 || max_slope < -8", "multiply_by": "0.46" },
+    { "else_if": "max_slope > 7 || max_slope < -7", "multiply_by": "0.60" },
+    { "else_if": "max_slope > 6 || max_slope < -6", "multiply_by": "0.73" },
+    { "else_if": "max_slope > 5 || max_slope < -5", "multiply_by": "0.83" },
+    { "else_if": "max_slope > 4 || max_slope < -4", "multiply_by": "0.90" },
+    { "else_if": "max_slope > 3 || max_slope < -3", "multiply_by": "0.95" },
+
+    { "if": "smoothness == IMPASSABLE", "multiply_by": "0" },
+    { "else_if": "smoothness == VERY_HORRIBLE", "multiply_by": "0.08" },
+    { "else_if": "smoothness == HORRIBLE", "multiply_by": "0.15" },
+    { "else_if": "smoothness == VERY_BAD", "multiply_by": "0.3" },
+    { "else_if": "smoothness == BAD", "multiply_by": "0.5" },
+    { "else_if": "smoothness == INTERMEDIATE", "multiply_by": "0.9" },
+
+    { "if": "surface == SAND", "multiply_by": "0.15" },
+    { "else_if": "surface == GRASS", "multiply_by": "0.25" },
+    { "else_if": "surface == GROUND || surface == DIRT", "multiply_by": "0.4" },
+    { "else_if": "surface == COBBLESTONE || surface == GRAVEL", "multiply_by": "0.45" },
+    { "else_if": "surface == FINE_GRAVEL", "multiply_by": "0.75" },
+    { "else_if": "surface == COMPACTED || surface == WOOD", "multiply_by": "0.85" },
+    { "else_if": "surface == PAVING_STONES", "multiply_by": "0.95" }
   ],
   "speed": [
+    { "if": "surface == SAND || surface == GRASS", "limit_to": "3" },
     {
-      "if": "surface == COBBLESTONE || surface == GROUND || surface == DIRT || surface == GRASS || surface == SAND",
+      "else_if": "surface == GROUND || surface == DIRT || surface == COBBLESTONE || surface == GRAVEL",
       "limit_to": "3"
-    }
+    },
+    { "else_if": "surface == FINE_GRAVEL", "limit_to": "4" },
+    { "if": "smoothness == VERY_BAD || smoothness == HORRIBLE || smoothness == VERY_HORRIBLE", "limit_to": "3" },
+    { "else_if": "smoothness == BAD", "limit_to": "3.5" }
   ]
 }

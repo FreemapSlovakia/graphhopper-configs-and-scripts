@@ -1,0 +1,104 @@
+From 22f20ae402c6c791aa0434c51f7583297dc617b6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Martin=20=C5=BDdila?= <m.zdila@gmail.com>
+Date: Wed, 2 Sep 2026 17:41:41 +0200
+Subject: [PATCH] max_slope: set -31/31 to 0 for short segments
+
+Backport of upstream 5697f586b40a to the 11.0 SlopeCalculator, which is still
+the pre-#3293 TagParser form, so the upstream commit does not cherry-pick.
+
+SlopeCalculator returns early for edges below MIN_LENGTH (8 m) and, until now,
+set only average_slope to 0 on that path. MaxSlope is created with
+negateReverseDirection, which makes IntEncodedValueImpl store it with a
+minStorableValue of -31, so an untouched max_slope decodes to -31 % forward and
++31 % reverse. Every sub-8 m edge in the graph therefore reported a sentinel
+that no custom model can tell from a real 31 % ramp -- and sub-8 m edges are
+kerb crossings, sidewalk links and junction stubs, i.e. exactly the connective
+tissue of a pedestrian network. A custom model blocking on |max_slope| > 12
+severed the graph into unreachable fragments.
+
+No built-in custom model reads max_slope, which is why this survived to a
+release: only hand-written custom models can observe it.
+---
+ .../routing/util/SlopeCalculator.java         |  4 ++-
+ .../routing/util/SlopeCalculatorTest.java     | 26 +++++++++++++++++++
+ docs/core/custom-models.md                    |  4 +--
+ 3 files changed, 31 insertions(+), 3 deletions(-)
+
+diff --git a/core/src/main/java/com/graphhopper/routing/util/SlopeCalculator.java b/core/src/main/java/com/graphhopper/routing/util/SlopeCalculator.java
+index 5e0fbb5ef..5cf4e35e9 100644
+--- a/core/src/main/java/com/graphhopper/routing/util/SlopeCalculator.java
++++ b/core/src/main/java/com/graphhopper/routing/util/SlopeCalculator.java
+@@ -34,9 +34,11 @@ public class SlopeCalculator implements TagParser {
+             // This calculation is a bit expensive and edge_distance is available already, but this would be in 3D
+             double distance2D = DistanceCalcEarth.calcDistance(pointList, false);
+             if (distance2D < MIN_LENGTH) {
++                // default minimum of average_slope and max_slope is negative => set it explicitly to 0
+                 if (averageSlopeEnc != null)
+-                    // default is minimum of average_slope is negative so we have to explicitly set it to 0
+                     averageSlopeEnc.setDecimal(false, edgeId, edgeIntAccess, 0);
++                if (maxSlopeEnc != null)
++                    maxSlopeEnc.setDecimal(false, edgeId, edgeIntAccess, 0);
+                 return;
+             }
+ 
+diff --git a/core/src/test/java/com/graphhopper/routing/util/SlopeCalculatorTest.java b/core/src/test/java/com/graphhopper/routing/util/SlopeCalculatorTest.java
+index 099ed407b..c51ab9cc0 100644
+--- a/core/src/test/java/com/graphhopper/routing/util/SlopeCalculatorTest.java
++++ b/core/src/test/java/com/graphhopper/routing/util/SlopeCalculatorTest.java
+@@ -99,6 +99,32 @@ class SlopeCalculatorTest {
+         assertEquals(31, averageEnc.getDecimal(true, edgeId, intAccess), 1e-3);
+     }
+ 
++    @Test
++    public void testShortEdgeHasNoSentinelMaxSlope() {
++        // Edges shorter than MIN_LENGTH get no slope calculated. Both values must then be
++        // written as an explicit 0: max_slope is stored with negateReverseDirection, so its
++        // untouched storage default decodes to the range minimum, i.e. -31 forward / +31
++        // reverse -- a sentinel indistinguishable from a real 31 % ramp to any custom model.
++        PointList pointList = new PointList(2, true);
++        pointList.add(51.0, 12.00000, 100.0);
++        pointList.add(51.0, 12.00005, 100.0); // ~3.5m, below MIN_LENGTH
++        ReaderWay way = new ReaderWay(1);
++        way.setTag("point_list", pointList);
++        ArrayEdgeIntAccess intAccess = new ArrayEdgeIntAccess(1);
++
++        DecimalEncodedValue averageEnc = AverageSlope.create();
++        DecimalEncodedValue maxEnc = MaxSlope.create();
++        new EncodingManager.Builder().add(averageEnc).add(maxEnc).build();
++        SlopeCalculator creator = new SlopeCalculator(maxEnc, averageEnc);
++
++        int edgeId = 0;
++        creator.handleWayTags(edgeId, intAccess, way, IntsRef.EMPTY);
++        assertEquals(0, maxEnc.getDecimal(false, edgeId, intAccess), 1e-3);
++        assertEquals(0, maxEnc.getDecimal(true, edgeId, intAccess), 1e-3);
++        assertEquals(0, averageEnc.getDecimal(false, edgeId, intAccess), 1e-3);
++        assertEquals(0, averageEnc.getDecimal(true, edgeId, intAccess), 1e-3);
++    }
++
+     @Test
+     public void test2D() {
+         ArrayEdgeIntAccess intAccess = new ArrayEdgeIntAccess(1);
+diff --git a/docs/core/custom-models.md b/docs/core/custom-models.md
+index dcc2a5270..88cf65872 100644
+--- a/docs/core/custom-models.md
++++ b/docs/core/custom-models.md
+@@ -102,14 +102,14 @@ boolean value (they are either true or false for a given road segment), like:
+ 
+ There are also some that take on a numeric value, like:
+ 
+-- average_slope: a number for 100 * "elevation change" / edge_distance for a road segment; it changes the sign in reverse direction; see max_slope
++- average_slope: a signed decimal for 100 * "elevation change" / edge_distance for a road segment; it changes the sign in reverse direction; see max_slope
+ - curvature: "beeline distance" / edge_distance (0..1) e.g. a curvy road is smaller than 1
+ - change_angle: specifies the angle difference between the current and the previous edge; only available in "turn_penalty"
+ - hike_rating: a number from 0 to 6 for the `sac_scale` in OSM, e.g. 0 means "missing", 1 means "hiking", 2 means "mountain_hiking", 3 means demanding_mountain_hiking, 4 means alpine_hiking, 5 means demanding_alpine_hiking, and 6 means difficult_alpine_hiking
+ - mtb_rating: a number from 0 to 7 for the `mtb:scale` in OSM, e.g. 0 means "missing", 1 means `mtb:scale=0`, 2 means `mtb:scale=1` and so on. A leading "+" or "-" character is ignored.  
+ - horse_rating: a number from 0 to 6 for the `horse_scale` in OSM, e.g. 0 means "missing", 1 means "common", 2 means "demanding", 3 means difficult, 4 means critical, 5 means dangerous, and 6 means impossible
+ - lanes: number of lanes
+-- max_slope: a signed decimal for the maximum slope (100 * "elevation change / distance_i") of an edge with `sum(distance_i)=edge_distance`. Important for longer road segments where ups (or downs) can be much bigger than the average_slope.
++- max_slope: a signed decimal for the maximum slope (100 * "elevation change / distance_i") of an edge with `sum(distance_i)=edge_distance`. Important for longer road segments where ups (or downs) can be much bigger than the average_slope. It changes the sign in reverse direction.
+ - max_speed: the speed limit from a sign (km/h)
+ - max_height (meter), max_width (meter), max_length (meter)
+ - max_weight (tonne), max_axle_load (tonne)
+-- 
+2.47.3
+

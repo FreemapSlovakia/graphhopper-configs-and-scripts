@@ -234,7 +234,7 @@ see [Building the jar](#building-the-jar).
 ## Building the jar
 
 `graphhopper-web-11.0.jar` is **not** the official release jar. Two commits are
-cherry-picked onto the 11.0 tag.
+cherry-picked onto the 11.0 tag, and one more is applied from `patches/`.
 
 The `sonny` elevation provider was added in
 [#3183](https://github.com/graphhopper/graphhopper/pull/3183) on 2025-11-12,
@@ -249,26 +249,52 @@ The second, [#3235](https://github.com/graphhopper/graphhopper/pull/3235) of
 reaches every sea Europe has — Adriatic, Baltic, North Sea, Aegean, the Channel
 — so without it every ferry way in the graph collects a point per 60 m.
 
+The third is ours to carry: `patches/0003-max-slope-short-segments.patch`, a
+backport of upstream `5697f586b40a`.
+
+`SlopeCalculator` returns early for edges below `MIN_LENGTH` (8 m) and, in 11.0,
+sets only `average_slope` to 0 on that path. `MaxSlope` is created with
+`negateReverseDirection`, which gives it a `minStorableValue` of -31, so an
+untouched `max_slope` decodes to **-31 % forward and +31 % reverse**. Every
+sub-8 m edge in the graph — kerb crossings, sidewalk links, junction stubs —
+therefore reports a sentinel indistinguishable from a real 31 % ramp. It went
+unnoticed upstream because no built-in custom model reads `max_slope`; ours do,
+and `stroller.json` blocking on `|max_slope| > 12` severed the pedestrian graph
+into unreachable fragments. Upstream's own fix does not cherry-pick, because
+#3293 had already moved the calculation to a post-import `execute(Graph)` pass,
+so the two lines are reapplied to 11.0's `TagParser` form by hand.
+
 Rather than run `12.0-SNAPSHOT` — ten months of unreleased changes, including
-`CustomWeighting` returning 10× its previous values and country rules moving
-into parsers — the release is used with those two commits cherry-picked. Both
-apply cleanly: 11.0 already has the `AbstractSRTMElevationProvider` constructor
-#3183 builds on, and the PR only adds two self-contained classes plus four lines
-of dispatch in `GraphHopper.java`, while #3235 is a single condition in
-`OSMReader`.
+`CustomWeighting` returning 10× its previous values, `max_speed` becoming a
+required encoded value, and country rules moving into parsers — the release is
+used with those commits applied. The two cherry-picks go cleanly: 11.0 already
+has the `AbstractSRTMElevationProvider` constructor #3183 builds on, and the PR
+only adds two self-contained classes plus four lines of dispatch in
+`GraphHopper.java`, while #3235 is a single condition in `OSMReader`.
 
 ```bash
 git clone https://github.com/graphhopper/graphhopper.git
 cd graphhopper
-git checkout -b 11.0-sonny-ferry 11.0
+git checkout -b 11.0-sonny-ferry-slope 11.0
 git cherry-pick 25903cd0c6cfd23e1e72da71900b26dc2cfc362f    # #3183 sonny provider
 git cherry-pick 75fb59df438bf6e536da51f4e453ad978149f355    # #3235 skip ferries
+git am < /opt/graphhopper/patches/0003-max-slope-short-segments.patch
 mvn -DskipTests -pl web -am package
 ```
 
-Check both landed. A jar silently missing either is the expensive failure: the
-import does not complain, it just aborts on `sonny` or quietly fattens every
-ferry line.
+The patch carries a regression test, so it is worth running that one class
+rather than trusting the build. `-DfailIfNoTests=false` is required, not
+optional: `-am` also runs the `test` phase in `web-api`, where the filter
+matches nothing and Surefire would otherwise abort the reactor.
+
+```bash
+mvn -pl core -am test -Dtest=SlopeCalculatorTest -DfailIfNoTests=false
+```
+
+Check all three landed. A jar silently missing one is the expensive failure: the
+import does not complain, it just aborts on `sonny`, quietly fattens every ferry
+line, or writes the `max_slope` sentinel that took a working stroller profile
+down to "Connection between locations not found".
 
 ```bash
 J=web/target/graphhopper-web-11.0-SNAPSHOT.jar
@@ -277,6 +303,11 @@ unzip -p "$J" com/graphhopper/reader/osm/OSMReader.class > /tmp/OSMReader.class
 javap -p -c /tmp/OSMReader.class \
   | awk '/getLongEdgeSamplingDistance/{f=1} f{print} /EdgeSampling.sample/{if(f)exit}' \
   | grep isFerry     # must print a line; empty means #3235 is missing
+
+unzip -p "$J" com/graphhopper/routing/util/SlopeCalculator.class > /tmp/SC.class
+javap -p -c /tmp/SC.class \
+  | awk '/double 8.0d/{f=1} f&&/return/{exit} f' \
+  | grep -c maxSlopeEnc   # must print 2; 0 means the max_slope patch is missing
 ```
 
 The tag's pom says `11.0-SNAPSHOT`, so the artifact has to be renamed to
@@ -291,9 +322,17 @@ sudo install -o freemap -g freemap -m 644 new.jar /opt/graphhopper/.gh-new.jar
 sudo mv -f /opt/graphhopper/.gh-new.jar /opt/graphhopper/graphhopper-web-11.0.jar
 ```
 
-The new jar takes effect at the next instance start, which the update script
-does as part of its normal switchover. Once a release finally contains #3183
-this section goes away — but read the 12.0 migration notes before jumping.
+The new jar takes effect for *serving* at the next instance start, which the
+update script does as part of its normal switchover. It takes effect for the
+data at the next **import**, which is a separate JVM invocation — so anything
+the patches change about what gets written to the graph, `max_slope` included,
+only appears once that instance has been rebuilt.
+
+Once a release contains all three — #3183, #3235 and `5697f586b40a` — this
+section goes away. Until then a release carrying only some of them still needs
+whichever checks above it does not cover. Read the 12.0 migration notes before
+jumping, and re-verify `max_slope` on a flat urban route afterwards, since #3293
+rewrote how it is derived.
 
 ## Failure Handling
 

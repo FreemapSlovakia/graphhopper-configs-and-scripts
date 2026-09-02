@@ -1,16 +1,52 @@
 // Hiking for someone who does not want to scramble, on top of hike.json +
-// foot_elevation.json. The SAC scale is the whole point: T1–T2 walking, T3
-// only where nothing else connects, T4 and up (alpine, exposure, hands) out.
+// foot_elevation.json. The SAC scale is the whole point: T1 walking, T2 real
+// hiking but no longer a stroll, T3 only where nothing else connects, T4 and up
+// (alpine, exposure, hands) out. hike.json already stops at T5, so the block
+// here at T4 is what makes this profile "easy" rather than merely survivable.
 //
-// The slope bands are graded for the same reason the ratings are: 25 % is a
-// scramble whatever the tags say, 15 % is merely hard work. `max_slope` is the
-// steepest stretch of an edge rather than its average, and the import samples
-// long edges so that there is something for it to find.
+// The slope penalty is tabulated a percent at a time for the same reason
+// stroller.json is, and that file carries the full explanation: 11.0 accepts a
+// value expression of one encoded value with `* + -` and `Math.sqrt` only, and
+// then range-checks it at the encoded value's storable endpoints (-31 and 31
+// for `max_slope`) while ignoring the enclosing `if`, so any usefully steep
+// linear penalty is rejected for going negative. `max_slope` is stored with
+// factor 1, so a band per percent is exactly the resolution the data has.
+//
+// The curve is far more forgiving than stroller's, because it is aimed at legs
+// rather than wheels. It stays neutral to 12 %, is still above half at 20 %,
+// and only collapses past 25 % — which is a scramble whatever the tags say, and
+// where the T-rating usually agrees. Nothing about slope is a hard block: it is
+// DEM-derived, and one bad cell should cost a detour rather than sever the
+// graph.
+//
+// `max_slope` is the steepest stretch of an edge rather than its average, and
+// the import samples long edges so there is something for it to find. It is
+// signed and flips with direction, so both signs are named — a 25 % descent is
+// where an easy hike turns into a careful one.
 {
   "priority": [
     { "if": "hike_rating >= 4", "multiply_by": "0" },
     { "else_if": "hike_rating == 3", "multiply_by": "0.15" },
-    { "if": "max_slope > 25 || max_slope < -25", "multiply_by": "0.3" },
-    { "else_if": "max_slope > 15 || max_slope < -15", "multiply_by": "0.7" }
+    { "else_if": "hike_rating == 2", "multiply_by": "0.75" },
+
+    { "if": "max_slope > 30 || max_slope < -30", "multiply_by": "0.11" },
+    { "else_if": "max_slope > 29 || max_slope < -29", "multiply_by": "0.14" },
+    { "else_if": "max_slope > 28 || max_slope < -28", "multiply_by": "0.17" },
+    { "else_if": "max_slope > 27 || max_slope < -27", "multiply_by": "0.21" },
+    { "else_if": "max_slope > 26 || max_slope < -26", "multiply_by": "0.25" },
+    { "else_if": "max_slope > 25 || max_slope < -25", "multiply_by": "0.30" },
+    { "else_if": "max_slope > 24 || max_slope < -24", "multiply_by": "0.35" },
+    { "else_if": "max_slope > 23 || max_slope < -23", "multiply_by": "0.41" },
+    { "else_if": "max_slope > 22 || max_slope < -22", "multiply_by": "0.47" },
+    { "else_if": "max_slope > 21 || max_slope < -21", "multiply_by": "0.53" },
+    { "else_if": "max_slope > 20 || max_slope < -20", "multiply_by": "0.59" },
+    { "else_if": "max_slope > 19 || max_slope < -19", "multiply_by": "0.65" },
+    { "else_if": "max_slope > 18 || max_slope < -18", "multiply_by": "0.71" },
+    { "else_if": "max_slope > 17 || max_slope < -17", "multiply_by": "0.76" },
+    { "else_if": "max_slope > 16 || max_slope < -16", "multiply_by": "0.81" },
+    { "else_if": "max_slope > 15 || max_slope < -15", "multiply_by": "0.86" },
+    { "else_if": "max_slope > 14 || max_slope < -14", "multiply_by": "0.90" },
+    { "else_if": "max_slope > 13 || max_slope < -13", "multiply_by": "0.94" },
+    { "else_if": "max_slope > 12 || max_slope < -12", "multiply_by": "0.97" }
   ]
 }

@@ -11,21 +11,87 @@
 // a one-way or through a private way. The blanket 1.35 above would otherwise
 // raise them to 8.1, so they are re-applied last, where nothing undoes them.
 //
-// One priority clause, borrowed from a published e-bike model: past 20 % the
-// assist has run out and it is a push whatever the motor is rated at, so a ramp
-// that steep is worth going round rather than merely being slow on. The climb
-// only — `max_slope` flips sign with direction, and a 20 % descent is a
-// question of brakes, not of effort.
+// ## Both slope ladders are tabulated a percent at a time
+//
+// Neither could be a formula. 11.0 accepts a value expression of one encoded
+// value combined with `* + -` and `Math.sqrt`, then range-checks it at the
+// encoded value's storable endpoints while ignoring the enclosing `if`; both
+// slope values span -31..31, so any usefully steep penalty is rejected for
+// going negative somewhere in that range. stroller.json carries the full
+// reading of `ValueExpressionVisitor`. Both are stored with factor 1, i.e.
+// whole percent, so a band per percent is exactly the resolution of the data.
+//
+// The priority ladder is the climb **only**. `max_slope` flips sign with
+// direction, and a 20 % descent is a question of brakes, not of effort — so
+// unlike stroller.json and easyhike.json nothing here names the negative side.
+// Past 20 % the assist has run out and it is a push whatever the motor is rated
+// at, which is where the old single `max_slope > 20 -> 0.4` band sat; the ladder
+// keeps that as its midpoint and grades either side of it.
+//
+// The speed side needs *two* ladders, and getting that wrong is easy. The old
+// model mixed a multiplier for gentle gradients (>=5 -> 0.9x) with absolute caps
+// for steep ones (>=10 -> 13, >=15 -> 8), and that mix was deliberate: a
+// `limit_to` only bites on a way already faster than the limit. Replacing the
+// multiplier with caps quietly made the e-bike *faster* uphill on slow ways —
+// bike.json gives `tracktype=grade3` 8 km/h, so 10.8 after the 1.35 above, and
+// a cap of 18 at 8 % never engages, where the old 0.9x had produced 9.72.
+//
+// So: a multiplicative ladder that scales whatever the surface allows, then a
+// ladder of absolute caps for the gradients where the motor itself is the
+// ceiling rather than the road. Both run on `average_slope` rather than
+// `max_slope`, because they answer "how fast is this edge ridden", which is the
+// whole edge and not its worst metre.
 {
-  "priority": [{ "if": "max_slope > 20", "multiply_by": "0.4" }],
+  "priority": [
+    { "if": "max_slope > 30", "multiply_by": "0.10" },
+    { "else_if": "max_slope > 29", "multiply_by": "0.12" },
+    { "else_if": "max_slope > 28", "multiply_by": "0.14" },
+    { "else_if": "max_slope > 27", "multiply_by": "0.17" },
+    { "else_if": "max_slope > 26", "multiply_by": "0.20" },
+    { "else_if": "max_slope > 25", "multiply_by": "0.24" },
+    { "else_if": "max_slope > 24", "multiply_by": "0.28" },
+    { "else_if": "max_slope > 23", "multiply_by": "0.33" },
+    { "else_if": "max_slope > 22", "multiply_by": "0.38" },
+    { "else_if": "max_slope > 21", "multiply_by": "0.44" },
+    { "else_if": "max_slope > 20", "multiply_by": "0.50" },
+    { "else_if": "max_slope > 19", "multiply_by": "0.58" },
+    { "else_if": "max_slope > 18", "multiply_by": "0.66" },
+    { "else_if": "max_slope > 17", "multiply_by": "0.75" },
+    { "else_if": "max_slope > 16", "multiply_by": "0.85" },
+    { "else_if": "max_slope > 15", "multiply_by": "0.93" }
+  ],
   "speed": [
     { "if": "true", "multiply_by": "1.35" },
-    { "if": "average_slope >= 15", "limit_to": "8" },
-    { "else_if": "average_slope >= 10", "limit_to": "13" },
-    { "else_if": "average_slope >= 5", "multiply_by": "0.9" },
+
+    { "if": "average_slope >= 20", "multiply_by": "0.45" },
+    { "else_if": "average_slope >= 19", "multiply_by": "0.48" },
+    { "else_if": "average_slope >= 18", "multiply_by": "0.52" },
+    { "else_if": "average_slope >= 17", "multiply_by": "0.55" },
+    { "else_if": "average_slope >= 16", "multiply_by": "0.58" },
+    { "else_if": "average_slope >= 15", "multiply_by": "0.62" },
+    { "else_if": "average_slope >= 14", "multiply_by": "0.65" },
+    { "else_if": "average_slope >= 13", "multiply_by": "0.68" },
+    { "else_if": "average_slope >= 12", "multiply_by": "0.71" },
+    { "else_if": "average_slope >= 11", "multiply_by": "0.74" },
+    { "else_if": "average_slope >= 10", "multiply_by": "0.77" },
+    { "else_if": "average_slope >= 9", "multiply_by": "0.80" },
+    { "else_if": "average_slope >= 8", "multiply_by": "0.83" },
+    { "else_if": "average_slope >= 7", "multiply_by": "0.86" },
+    { "else_if": "average_slope >= 6", "multiply_by": "0.89" },
+    { "else_if": "average_slope >= 5", "multiply_by": "0.92" },
+    { "else_if": "average_slope >= 4", "multiply_by": "0.95" },
     { "else_if": "average_slope <= -4", "multiply_by": "1.05" },
+
+    { "if": "average_slope >= 20", "limit_to": "6" },
+    { "else_if": "average_slope >= 18", "limit_to": "7" },
+    { "else_if": "average_slope >= 16", "limit_to": "8" },
+    { "else_if": "average_slope >= 14", "limit_to": "10" },
+    { "else_if": "average_slope >= 12", "limit_to": "12" },
+    { "else_if": "average_slope >= 10", "limit_to": "14" },
+
     { "if": "average_slope > -4", "limit_to": "25" },
     { "else": "", "limit_to": "35" },
+
     { "if": "!bike_access && backward_bike_access", "limit_to": "6" },
     { "if": "bike_road_access == PRIVATE || bike_road_access == DESTINATION", "limit_to": "6" }
   ]
