@@ -113,7 +113,6 @@ graphhopper:
     - profile: racingbike
     - profile: mtb
     - profile: motorcycle
-    - profile: carnotoll
     - profile: ebike
     - profile: gravelbike
     - profile: stroller
@@ -123,12 +122,17 @@ graphhopper:
   # below), so each one above is contracted in full — but they are independent,
   # and the default of 1 runs them one after another. Threads trade the import's
   # RAM for its wall clock, and what scales with this number is the per-job
-  # working set rather than the graph, which MMAP keeps on disk. 2 by report
-  # rather than by record: this line was commented out until now, so every
-  # import git knows about ran at the default of 1, and the ~34 GiB peak on
-  # record is a one-thread, eight-profile number. Watch the first thirteen-
-  # profile import before going higher. car, car4wd and carnotoll carry turn
-  # costs, whose edge-based contraction is the expensive kind.
+  # working set rather than the graph, which MMAP keeps on disk.
+  #
+  # 2, and now measured rather than assumed. On the first thirteen-profile
+  # import the JVM peaked at 91.6 GiB RSS with its heap at 61 of the 64 GiB
+  # -Xmx allows, while two edge-based contractions overlapped, and the host —
+  # 251 GB with a ~100 GB postgis co-tenant — pushed 30 GB into swap doing it.
+  # A third concurrent preparation would share that same heap, so this is the
+  # ceiling without a larger -Xmx, and a larger -Xmx has nowhere to go here.
+  #
+  # car and car4wd carry turn costs, and their edge-based contraction is what
+  # dominates: about 5 h each, against 15-62 min for a node-based one.
   prepare.ch.threads: 2
 
   # Hybrid mode:
@@ -140,7 +144,31 @@ graphhopper:
   # profile for which an LM profile exists. Important: This only will give correct routing results if the weights
   # calculated for the profile are equal or larger (for every edge) than those calculated for the profile that was used
   # for the preparation (`my_other_profile`)
-  profiles_lm: []
+  #
+  # carnotoll rides on car's landmarks rather than contracting itself. Its own
+  # edge-based contraction took 5.0 h on the first thirteen-profile import —
+  # against 15 to 62 minutes for a node-based one — for a profile that is
+  # car.json plus one clause multiplying priority by zero. That single
+  # difference is also what makes the sharing legal: blocking an edge only ever
+  # raises its weight, so carnotoll's weight is >= car's everywhere, which is
+  # the condition stated above.
+  #
+  # It is cheap because LM preparation is node-based even for a profile with
+  # turn costs — GraphHopper builds the landmark weighting with them stripped
+  # and adds them back per query (createLMConfigs, and #1960 for why) — so it
+  # never pays the edge-based penalty that made the contraction expensive.
+  #
+  # The cost is query speed: carnotoll is answered by landmarks rather than a
+  # contraction, tens of milliseconds instead of about one. That is the right
+  # trade for the least-travelled of the car profiles. car itself keeps its CH
+  # and is unaffected; only the landmark set is shared.
+  #
+  # stroller and easyhike qualify on the same weight argument, but they cost 15
+  # and 62 minutes to contract, so they stay in CH.
+  profiles_lm:
+    - profile: car
+    - profile: carnotoll
+      preparation_profile: car
 
   #### Encoded Values ####
 
