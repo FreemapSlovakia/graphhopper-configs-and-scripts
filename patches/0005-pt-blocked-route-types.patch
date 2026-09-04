@@ -1,0 +1,99 @@
+From bd20423de896adfab817dc456b8556444dc5aecf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Martin=20=C5=BDdila?= <m.zdila@gmail.com>
+Date: Fri, 4 Sep 2026 12:43:29 +0200
+Subject: [PATCH] expose pt.blocked_route_types on /route-pt, as
+ PtIsochroneResource already does
+
+The Request object has carried blockedRouteTypes for years and all three
+PtRouter implementations honour it -- it is passed straight into GraphExplorer,
+and PtRouterFreeWalkImpl and PtRouterTripBasedImpl both read it from the
+request. PtIsochroneResource exposes it as `pt.blocked_route_types`. Only
+PtRouteResource never wired it up, so a caller can exclude a mode from an
+isochrone but not from a journey, which looks like an oversight rather than a
+position: the parameter already has a name, a default and an implementation.
+
+Four lines, no new concepts, and the same name and default as the isochrone
+resource so the two endpoints stay consistent.
+
+Two tests on the existing sample feed, whose NADAV -> NANAA connection is served
+only by route_type 3: blocking bit 3 leaves no transit leg (a walking path may
+still come back, which is why the assertion is on leg type rather than on the
+absence of a path), and blocking bit 2 leaves the bus connection untouched, so
+the filter is selective rather than a blunt off switch.
+
+Boarding penalties are deliberately not exposed here. Request also carries
+boardingPenaltiesByRouteType, but that is a Map<Integer, Long> and needs a query
+parameter format nobody has agreed on, which is a separate discussion from
+wiring up a parameter that already exists.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QLjdPY3K5CSXA7cKJK4pLt
+---
+ .../resources/PtRouteResource.java            |  2 ++
+ .../resources/PtRouteResourceTest.java        | 30 +++++++++++++++++++
+ 2 files changed, 32 insertions(+)
+
+diff --git a/web-bundle/src/main/java/com/graphhopper/resources/PtRouteResource.java b/web-bundle/src/main/java/com/graphhopper/resources/PtRouteResource.java
+index 3ff069d6a..c03953639 100644
+--- a/web-bundle/src/main/java/com/graphhopper/resources/PtRouteResource.java
++++ b/web-bundle/src/main/java/com/graphhopper/resources/PtRouteResource.java
+@@ -71,6 +71,7 @@ public class PtRouteResource {
+                             @QueryParam("pt.limit_solutions") Integer limitSolutions,
+                             @QueryParam("pt.limit_trip_time") DurationParam limitTripTime,
+                             @QueryParam("pt.limit_street_time") DurationParam limitStreetTime,
++                            @QueryParam("pt.blocked_route_types") @DefaultValue("0") int blockedRouteTypes,
+                             @QueryParam("pt.access_profile") String accessProfile,
+                             @QueryParam("pt.beta_access_time") Double betaAccessTime,
+                             @QueryParam("pt.egress_profile") String egressProfile,
+@@ -91,6 +92,7 @@ public class PtRouteResource {
+         Optional.ofNullable(limitSolutions).ifPresent(request::setLimitSolutions);
+         Optional.ofNullable(limitTripTime.get()).ifPresent(request::setLimitTripTime);
+         Optional.ofNullable(limitStreetTime.get()).ifPresent(request::setLimitStreetTime);
++        request.setBlockedRouteTypes(blockedRouteTypes);
+         Optional.ofNullable(accessProfile).ifPresent(request::setAccessProfile);
+         Optional.ofNullable(betaAccessTime).ifPresent(request::setBetaAccessTime);
+         Optional.ofNullable(egressProfile).ifPresent(request::setEgressProfile);
+diff --git a/web/src/test/java/com/graphhopper/application/resources/PtRouteResourceTest.java b/web/src/test/java/com/graphhopper/application/resources/PtRouteResourceTest.java
+index 68b35a31a..6c0001313 100644
+--- a/web/src/test/java/com/graphhopper/application/resources/PtRouteResourceTest.java
++++ b/web/src/test/java/com/graphhopper/application/resources/PtRouteResourceTest.java
+@@ -71,6 +71,36 @@ public class PtRouteResourceTest {
+         Helper.removeDir(new File(DIR));
+     }
+ 
++    @Test
++    public void testBlockedRouteTypesRemovesTheOnlyMode() {
++        // NADAV -> NANAA is served by route_type 3 (bus) only; blocking bit 3 leaves nothing to board
++        JsonNode jsonNode = clientTarget(app, "/route")
++                .queryParam("point", "Stop(NADAV)")
++                .queryParam("point", "Stop(NANAA)")
++                .queryParam("profile", "pt")
++                .queryParam("pt.earliest_departure_time", "2007-01-01T15:44:00Z")
++                .queryParam("pt.blocked_route_types", 1 << 3)
++                .request().get(JsonNode.class);
++        // a walking path may still be returned; what must not survive is a transit leg
++        JsonNode legs = jsonNode.at("/paths/0/legs");
++        for (JsonNode leg : legs)
++            assertNotEquals("pt", leg.path("type").asText(), "transit leg survived a blocked route type: " + legs);
++    }
++
++    @Test
++    public void testBlockedRouteTypesIgnoresOtherModes() {
++        // blocking rail (bit 2) must leave the bus connection alone
++        JsonNode jsonNode = clientTarget(app, "/route")
++                .queryParam("point", "Stop(NADAV)")
++                .queryParam("point", "Stop(NANAA)")
++                .queryParam("profile", "pt")
++                .queryParam("pt.earliest_departure_time", "2007-01-01T15:44:00Z")
++                .queryParam("pt.blocked_route_types", 1 << 2)
++                .request().get(JsonNode.class);
++        assertEquals(1, jsonNode.at("/paths/0/legs").size());
++        assertEquals("pt", jsonNode.at("/paths/0/legs/0/type").asText());
++    }
++
+     @Test
+     public void testStationStationQuery() {
+         JsonNode jsonNode = clientTarget(app, "/route")
+-- 
+2.47.3
+
