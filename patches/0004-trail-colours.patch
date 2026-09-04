@@ -1,0 +1,523 @@
+From dcc88a8da465ddecc9d25ff9774edba37f96dfe3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Martin=20=C5=BDdila?= <m.zdila@gmail.com>
+Date: Fri, 4 Sep 2026 09:21:29 +0200
+Subject: [PATCH] trail colours: hiking_colours and bike_colours from route
+ relations
+
+Two 9-bit masks, one bit per TrailColour, filled from the waymark colour of the
+route relations an edge belongs to: hiking_colours from route=hiking|foot,
+bike_colours from route=bicycle|mtb. Exposed like any other encoded value, so
+`details=hiking_colours` returns them and a custom model can read them.
+
+A mask rather than an enum because a way routinely carries several routes of
+different colours, and a single dominant colour is a rendering decision the
+client should make, not one the graph should bake in. OSMReader hands each
+relation the flags accumulated from the way's earlier relations
+(OSMReader.preprocessRelations), so the bits simply OR together and relation
+order never matters -- unlike the network parsers, this one has no conflict to
+resolve.
+
+Colour comes from the first field of osmc:symbol, falling back to colour (then
+color). The fallback is not the rare path: across Europe 69 % of route=hiking
+relations carry osmc:symbol against 18 % with colour, while for route=bicycle it
+is 2 % against 16 %. Reading either tag alone would miss most of one mode. An
+unparsable symbol field falls through to the colour tag rather than stopping,
+so a value like 'greenbl' cannot hide a good colour=green beside it.
+
+Nine bits: the eight colours that actually occur on European route relations
+(red, blue, green, yellow, black, orange, gray, white) plus OTHER for the
+recognisable rest -- brown, purple, teal and the hex values. Those are each too
+rare to justify a bit, but collapsing them keeps such a way marked instead of
+dropping it. grey and gray share a bit; both spellings are live.
+
+MTB folds into bike_colours rather than taking a third mask: 16k route=mtb
+relations in Europe against 245k route=hiking, only 4k of them coloured, and a
+separate mask would only buy the case where an mtb and a cycle route of
+different colours share a way.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QLjdPY3K5CSXA7cKJK4pLt
+---
+ .../java/com/graphhopper/GraphHopper.java     |   5 +
+ .../graphhopper/routing/ev/BikeColours.java   |  30 +++++
+ .../routing/ev/DefaultImportRegistry.java     |   4 +
+ .../graphhopper/routing/ev/HikingColours.java |  30 +++++
+ .../graphhopper/routing/ev/TrailColour.java   | 100 ++++++++++++++
+ .../util/parsers/OSMTrailColourParser.java    | 111 +++++++++++++++
+ .../parsers/OSMTrailColourParserTest.java     | 127 ++++++++++++++++++
+ 7 files changed, 407 insertions(+)
+ create mode 100644 core/src/main/java/com/graphhopper/routing/ev/BikeColours.java
+ create mode 100644 core/src/main/java/com/graphhopper/routing/ev/HikingColours.java
+ create mode 100644 core/src/main/java/com/graphhopper/routing/ev/TrailColour.java
+ create mode 100644 core/src/main/java/com/graphhopper/routing/util/parsers/OSMTrailColourParser.java
+ create mode 100644 core/src/test/java/com/graphhopper/routing/util/parsers/OSMTrailColourParserTest.java
+
+diff --git a/core/src/main/java/com/graphhopper/GraphHopper.java b/core/src/main/java/com/graphhopper/GraphHopper.java
+index 27403c8b8..d2135eb74 100644
+--- a/core/src/main/java/com/graphhopper/GraphHopper.java
++++ b/core/src/main/java/com/graphhopper/GraphHopper.java
+@@ -44,6 +44,7 @@ import com.graphhopper.routing.util.*;
+ import com.graphhopper.routing.util.countryrules.CountryRuleFactory;
+ import com.graphhopper.routing.util.parsers.OSMBikeNetworkTagParser;
+ import com.graphhopper.routing.util.parsers.OSMFootNetworkTagParser;
++import com.graphhopper.routing.util.parsers.OSMTrailColourParser;
+ import com.graphhopper.routing.util.parsers.OSMMtbNetworkTagParser;
+ import com.graphhopper.routing.util.parsers.TagParser;
+ import com.graphhopper.routing.weighting.Weighting;
+@@ -680,6 +681,10 @@ public class GraphHopper {
+             osmParsers.addRelationTagParser(relConfig -> new OSMMtbNetworkTagParser(encodingManager.getEnumEncodedValue(MtbNetwork.KEY, RouteNetwork.class), relConfig));
+         if (encodingManager.hasEncodedValue(FootNetwork.KEY))
+             osmParsers.addRelationTagParser(relConfig -> new OSMFootNetworkTagParser(encodingManager.getEnumEncodedValue(FootNetwork.KEY, RouteNetwork.class), relConfig));
++        if (encodingManager.hasEncodedValue(HikingColours.KEY))
++            osmParsers.addRelationTagParser(relConfig -> new OSMTrailColourParser(encodingManager.getIntEncodedValue(HikingColours.KEY), OSMTrailColourParser.HIKING_ROUTES, "hiking", relConfig));
++        if (encodingManager.hasEncodedValue(BikeColours.KEY))
++            osmParsers.addRelationTagParser(relConfig -> new OSMTrailColourParser(encodingManager.getIntEncodedValue(BikeColours.KEY), OSMTrailColourParser.BIKE_ROUTES, "bike", relConfig));
+ 
+         restrictionVehicleTypesByProfile.forEach((profile, restrictionVehicleTypes) -> {
+             osmParsers.addRestrictionTagParser(new RestrictionTagParser(
+diff --git a/core/src/main/java/com/graphhopper/routing/ev/BikeColours.java b/core/src/main/java/com/graphhopper/routing/ev/BikeColours.java
+new file mode 100644
+index 000000000..8782e56a8
+--- /dev/null
++++ b/core/src/main/java/com/graphhopper/routing/ev/BikeColours.java
+@@ -0,0 +1,30 @@
++/*
++ *  Licensed to GraphHopper GmbH under one or more contributor
++ *  license agreements. See the NOTICE file distributed with this work for
++ *  additional information regarding copyright ownership.
++ *
++ *  GraphHopper GmbH licenses this file to you under the Apache License,
++ *  Version 2.0 (the "License"); you may not use this file except in
++ *  compliance with the License. You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ */
++package com.graphhopper.routing.ev;
++
++/**
++ * Bit mask of the {@link TrailColour}s of the route=bicycle and route=mtb relations an edge belongs
++ * to. Zero means no marked cycling route.
++ */
++public class BikeColours {
++    public static final String KEY = "bike_colours";
++
++    public static IntEncodedValue create() {
++        return new IntEncodedValueImpl(KEY, TrailColour.BITS, false);
++    }
++}
+diff --git a/core/src/main/java/com/graphhopper/routing/ev/DefaultImportRegistry.java b/core/src/main/java/com/graphhopper/routing/ev/DefaultImportRegistry.java
+index ca254a82d..c72e65450 100644
+--- a/core/src/main/java/com/graphhopper/routing/ev/DefaultImportRegistry.java
++++ b/core/src/main/java/com/graphhopper/routing/ev/DefaultImportRegistry.java
+@@ -226,6 +226,10 @@ public class DefaultImportRegistry implements ImportRegistry {
+                     ));
+         else if (BikeNetwork.KEY.equals(name) || MtbNetwork.KEY.equals(name) || FootNetwork.KEY.equals(name))
+             return ImportUnit.create(name, props -> RouteNetwork.create(name), null);
++        else if (HikingColours.KEY.equals(name))
++            return ImportUnit.create(name, props -> HikingColours.create(), null);
++        else if (BikeColours.KEY.equals(name))
++            return ImportUnit.create(name, props -> BikeColours.create(), null);
+ 
+         else if (BusAccess.KEY.equals(name))
+             return ImportUnit.create(name, props -> BusAccess.create(),
+diff --git a/core/src/main/java/com/graphhopper/routing/ev/HikingColours.java b/core/src/main/java/com/graphhopper/routing/ev/HikingColours.java
+new file mode 100644
+index 000000000..0ae6391b3
+--- /dev/null
++++ b/core/src/main/java/com/graphhopper/routing/ev/HikingColours.java
+@@ -0,0 +1,30 @@
++/*
++ *  Licensed to GraphHopper GmbH under one or more contributor
++ *  license agreements. See the NOTICE file distributed with this work for
++ *  additional information regarding copyright ownership.
++ *
++ *  GraphHopper GmbH licenses this file to you under the Apache License,
++ *  Version 2.0 (the "License"); you may not use this file except in
++ *  compliance with the License. You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ */
++package com.graphhopper.routing.ev;
++
++/**
++ * Bit mask of the {@link TrailColour}s of the route=hiking and route=foot relations an edge belongs
++ * to. Zero means no marked walking route.
++ */
++public class HikingColours {
++    public static final String KEY = "hiking_colours";
++
++    public static IntEncodedValue create() {
++        return new IntEncodedValueImpl(KEY, TrailColour.BITS, false);
++    }
++}
+diff --git a/core/src/main/java/com/graphhopper/routing/ev/TrailColour.java b/core/src/main/java/com/graphhopper/routing/ev/TrailColour.java
+new file mode 100644
+index 000000000..b16cf0bf7
+--- /dev/null
++++ b/core/src/main/java/com/graphhopper/routing/ev/TrailColour.java
+@@ -0,0 +1,100 @@
++/*
++ *  Licensed to GraphHopper GmbH under one or more contributor
++ *  license agreements. See the NOTICE file distributed with this work for
++ *  additional information regarding copyright ownership.
++ *
++ *  GraphHopper GmbH licenses this file to you under the Apache License,
++ *  Version 2.0 (the "License"); you may not use this file except in
++ *  compliance with the License. You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ */
++package com.graphhopper.routing.ev;
++
++import com.graphhopper.util.Helper;
++
++import java.util.Arrays;
++import java.util.Collection;
++import java.util.HashSet;
++
++/**
++ * The waymark colour of a hiking or cycling route relation. One bit each in the
++ * {@link HikingColours} and {@link BikeColours} masks, because a way commonly carries several
++ * routes of different colours and every one of them is worth showing.
++ * <p>
++ * The eight named colours are the ones that actually occur on European route relations; everything
++ * else recognisable as a colour - the rarer names and the hex values - collapses into OTHER, which
++ * keeps such a way marked without spending a bit per long tail value.
++ */
++public enum TrailColour {
++
++    RED, BLUE, GREEN, YELLOW, BLACK, ORANGE, GRAY, WHITE, OTHER;
++
++    /**
++     * Bits needed to store any combination of these.
++     */
++    public static final int BITS = values().length;
++
++    private static final Collection<String> OTHER_NAMES = new HashSet<>(Arrays.asList(
++            "brown", "purple", "violet", "teal", "cyan", "aqua", "pink", "magenta", "fuchsia",
++            "maroon", "olive", "navy", "lime", "silver", "gold", "beige", "turquoise"));
++
++    public int bit() {
++        return 1 << ordinal();
++    }
++
++    /**
++     * @return the colour for a single OSM colour value, or null when the value is not a colour at
++     * all. Junk has to be distinguishable from a colour we merely do not store, because the parser
++     * falls back from osmc:symbol to the colour tag on null and would otherwise stop at the first
++     * unparsable symbol.
++     */
++    public static TrailColour find(String value) {
++        if (Helper.isEmpty(value))
++            return null;
++        String v = Helper.toLowerCase(value).trim();
++        switch (v) {
++            case "red":
++                return RED;
++            case "blue":
++                return BLUE;
++            case "green":
++                return GREEN;
++            case "yellow":
++                return YELLOW;
++            case "black":
++                return BLACK;
++            case "orange":
++                return ORANGE;
++            case "gray":
++            case "grey":
++                return GRAY;
++            case "white":
++                return WHITE;
++            default:
++                return OTHER_NAMES.contains(v) || isHex(v) ? OTHER : null;
++        }
++    }
++
++    private static boolean isHex(String v) {
++        if (v.charAt(0) != '#' || (v.length() != 4 && v.length() != 7))
++            return false;
++        for (int i = 1; i < v.length(); i++) {
++            char c = v.charAt(i);
++            if ((c < '0' || c > '9') && (c < 'a' || c > 'f'))
++                return false;
++        }
++        return true;
++    }
++
++    @Override
++    public String toString() {
++        return Helper.toLowerCase(super.toString());
++    }
++}
+diff --git a/core/src/main/java/com/graphhopper/routing/util/parsers/OSMTrailColourParser.java b/core/src/main/java/com/graphhopper/routing/util/parsers/OSMTrailColourParser.java
+new file mode 100644
+index 000000000..6c65690a1
+--- /dev/null
++++ b/core/src/main/java/com/graphhopper/routing/util/parsers/OSMTrailColourParser.java
+@@ -0,0 +1,111 @@
++/*
++ *  Licensed to GraphHopper GmbH under one or more contributor
++ *  license agreements. See the NOTICE file distributed with this work for
++ *  additional information regarding copyright ownership.
++ *
++ *  GraphHopper GmbH licenses this file to you under the Apache License,
++ *  Version 2.0 (the "License"); you may not use this file except in
++ *  compliance with the License. You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ */
++package com.graphhopper.routing.util.parsers;
++
++import com.graphhopper.reader.ReaderRelation;
++import com.graphhopper.reader.ReaderWay;
++import com.graphhopper.routing.ev.*;
++import com.graphhopper.storage.IntsRef;
++import com.graphhopper.util.Helper;
++
++import java.util.Arrays;
++import java.util.Collection;
++import java.util.HashSet;
++
++import static com.graphhopper.routing.util.EncodingManager.getKey;
++
++/**
++ * Collects the waymark colours of the route relations an edge belongs to into a
++ * {@link TrailColour} bit mask - hiking_colours from walking routes, bike_colours from cycling
++ * ones.
++ * <p>
++ * Unlike the network parsers this never has to resolve a conflict: OSMReader hands each relation
++ * the flags accumulated from the way's earlier relations, so overlapping routes simply OR their
++ * bits together and relation order does not matter.
++ * <p>
++ * Colour comes from the first field of osmc:symbol - the waycolour - and falls back to the colour
++ * tag, which is not a rare case but the usual one outside walking routes: across Europe 69 % of
++ * route=hiking relations carry osmc:symbol against 18 % with colour, while for route=bicycle it is
++ * 2 % against 16 %. Neither tag alone is enough.
++ */
++public class OSMTrailColourParser implements RelationTagParser {
++
++    public static final Collection<String> HIKING_ROUTES = new HashSet<>(Arrays.asList("hiking", "foot"));
++    public static final Collection<String> BIKE_ROUTES = new HashSet<>(Arrays.asList("bicycle", "mtb"));
++
++    private final IntEncodedValue colourEnc;
++    private final Collection<String> routeValues;
++    // used for internal transformation from relations into colourEnc
++    private final IntEncodedValue transformerColourRelEnc;
++
++    public OSMTrailColourParser(IntEncodedValue colourEnc, Collection<String> routeValues, String prefix,
++                                EncodedValue.InitializerConfig relConfig) {
++        this.colourEnc = colourEnc;
++        this.routeValues = routeValues;
++        this.transformerColourRelEnc = new IntEncodedValueImpl(getKey(prefix, "colour_relation"), TrailColour.BITS, false);
++        this.transformerColourRelEnc.init(relConfig);
++    }
++
++    @Override
++    public void handleRelationTags(IntsRef relFlags, ReaderRelation relation) {
++        if (!routeValues.contains(Helper.toLowerCase(relation.getTag("route", ""))))
++            return;
++
++        int mask = colourMask(relation);
++        if (mask == 0)
++            return;
++
++        IntsRefEdgeIntAccess relIntAccess = new IntsRefEdgeIntAccess(relFlags);
++        int old = transformerColourRelEnc.getInt(false, -1, relIntAccess);
++        if ((old | mask) != old)
++            transformerColourRelEnc.setInt(false, -1, relIntAccess, old | mask);
++    }
++
++    @Override
++    public void handleWayTags(int edgeId, EdgeIntAccess edgeIntAccess, ReaderWay way, IntsRef relationFlags) {
++        // just copy value into different bit range
++        IntsRefEdgeIntAccess relIntAccess = new IntsRefEdgeIntAccess(relationFlags);
++        colourEnc.setInt(false, edgeId, edgeIntAccess, transformerColourRelEnc.getInt(false, -1, relIntAccess));
++    }
++
++    private int colourMask(ReaderRelation relation) {
++        String osmcSymbol = relation.getTag("osmc:symbol", "");
++        if (!osmcSymbol.isEmpty()) {
++            // waycolour:background:foreground..., only the waycolour is the colour of the mark
++            int mask = parse(osmcSymbol.split(":", 2)[0]);
++            if (mask != 0)
++                return mask;
++        }
++        // an unparsable symbol is not an absent one: fall through to the colour tag rather than
++        // let a value like 'greenbl' hide a perfectly good colour=green beside it
++        int mask = parse(relation.getTag("colour", ""));
++        return mask != 0 ? mask : parse(relation.getTag("color", ""));
++    }
++
++    private int parse(String value) {
++        if (value.isEmpty())
++            return 0;
++        int mask = 0;
++        for (String part : value.split(";")) {
++            TrailColour colour = TrailColour.find(part);
++            if (colour != null)
++                mask |= colour.bit();
++        }
++        return mask;
++    }
++}
+diff --git a/core/src/test/java/com/graphhopper/routing/util/parsers/OSMTrailColourParserTest.java b/core/src/test/java/com/graphhopper/routing/util/parsers/OSMTrailColourParserTest.java
+new file mode 100644
+index 000000000..ab45bf3dc
+--- /dev/null
++++ b/core/src/test/java/com/graphhopper/routing/util/parsers/OSMTrailColourParserTest.java
+@@ -0,0 +1,127 @@
++package com.graphhopper.routing.util.parsers;
++
++import com.graphhopper.reader.ReaderRelation;
++import com.graphhopper.reader.ReaderWay;
++import com.graphhopper.routing.ev.*;
++import com.graphhopper.routing.util.EncodingManager;
++import com.graphhopper.storage.IntsRef;
++import org.junit.jupiter.api.Test;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++
++class OSMTrailColourParserTest {
++
++    private final IntEncodedValue hikingEnc = HikingColours.create();
++    private final IntEncodedValue bikeEnc = BikeColours.create();
++    @SuppressWarnings("unused") // initializes the edge encoded values above
++    private final EncodingManager em = new EncodingManager.Builder().add(hikingEnc).add(bikeEnc).build();
++    private final EncodedValue.InitializerConfig relConfig = new EncodedValue.InitializerConfig();
++    private final OSMTrailColourParser hiking = new OSMTrailColourParser(hikingEnc,
++            OSMTrailColourParser.HIKING_ROUTES, "hiking", relConfig);
++    private final OSMTrailColourParser bike = new OSMTrailColourParser(bikeEnc,
++            OSMTrailColourParser.BIKE_ROUTES, "bike", relConfig);
++
++    private ReaderRelation route(String routeValue, String key, String value) {
++        ReaderRelation relation = new ReaderRelation(1);
++        relation.setTag("type", "route");
++        relation.setTag("route", routeValue);
++        relation.setTag(key, value);
++        return relation;
++    }
++
++    private int hikingColoursOf(ReaderRelation... relations) {
++        IntsRef relFlags = new IntsRef(2);
++        for (ReaderRelation relation : relations) {
++            hiking.handleRelationTags(relFlags, relation);
++            bike.handleRelationTags(relFlags, relation);
++        }
++        ArrayEdgeIntAccess edgeIntAccess = new ArrayEdgeIntAccess(1);
++        hiking.handleWayTags(0, edgeIntAccess, new ReaderWay(1), relFlags);
++        return hikingEnc.getInt(false, 0, edgeIntAccess);
++    }
++
++    private int bikeColoursOf(ReaderRelation... relations) {
++        IntsRef relFlags = new IntsRef(2);
++        for (ReaderRelation relation : relations) {
++            hiking.handleRelationTags(relFlags, relation);
++            bike.handleRelationTags(relFlags, relation);
++        }
++        ArrayEdgeIntAccess edgeIntAccess = new ArrayEdgeIntAccess(1);
++        bike.handleWayTags(0, edgeIntAccess, new ReaderWay(1), relFlags);
++        return bikeEnc.getInt(false, 0, edgeIntAccess);
++    }
++
++    @Test
++    public void testOsmcSymbolWaycolour() {
++        assertEquals(TrailColour.RED.bit(),
++                hikingColoursOf(route("hiking", "osmc:symbol", "red:white:red_bar")));
++    }
++
++    @Test
++    public void testColourFallback() {
++        // route=bicycle almost never carries osmc:symbol, the colour tag is what it has
++        assertEquals(TrailColour.GREEN.bit(),
++                bikeColoursOf(route("bicycle", "colour", "green")));
++    }
++
++    @Test
++    public void testUnparsableSymbolFallsThroughToColour() {
++        ReaderRelation relation = route("hiking", "osmc:symbol", "greenbl");
++        relation.setTag("colour", "green");
++        assertEquals(TrailColour.GREEN.bit(), hikingColoursOf(relation));
++    }
++
++    @Test
++    public void testOverlappingRoutesAreOred() {
++        assertEquals(TrailColour.RED.bit() | TrailColour.GREEN.bit(),
++                hikingColoursOf(route("hiking", "colour", "red"), route("foot", "colour", "green")));
++    }
++
++    @Test
++    public void testSemicolonSeparatedValues() {
++        assertEquals(TrailColour.YELLOW.bit() | TrailColour.BLUE.bit(),
++                hikingColoursOf(route("hiking", "colour", "yellow;blue")));
++    }
++
++    @Test
++    public void testGreyIsGray() {
++        assertEquals(TrailColour.GRAY.bit(), hikingColoursOf(route("hiking", "colour", "grey")));
++        assertEquals(TrailColour.GRAY.bit(), hikingColoursOf(route("hiking", "colour", "gray")));
++    }
++
++    @Test
++    public void testRareColoursAndHexBecomeOther() {
++        assertEquals(TrailColour.OTHER.bit(), hikingColoursOf(route("hiking", "colour", "teal")));
++        assertEquals(TrailColour.OTHER.bit(), hikingColoursOf(route("hiking", "colour", "brown")));
++        assertEquals(TrailColour.OTHER.bit(), hikingColoursOf(route("hiking", "colour", "#C61D23")));
++    }
++
++    @Test
++    public void testJunkIsNotAColour() {
++        assertEquals(0, hikingColoursOf(route("hiking", "colour", "none")));
++        assertEquals(0, hikingColoursOf(route("hiking", "colour", "#12345")));
++        assertEquals(0, hikingColoursOf(route("hiking", "osmc:symbol", "greenbl")));
++    }
++
++    @Test
++    public void testMasksDoNotLeakIntoEachOther() {
++        ReaderRelation cycling = route("bicycle", "colour", "blue");
++        assertEquals(0, hikingColoursOf(cycling));
++        assertEquals(TrailColour.BLUE.bit(), bikeColoursOf(cycling));
++
++        ReaderRelation walking = route("hiking", "colour", "red");
++        assertEquals(0, bikeColoursOf(walking));
++        assertEquals(TrailColour.RED.bit(), hikingColoursOf(walking));
++    }
++
++    @Test
++    public void testMtbCountsAsCycling() {
++        assertEquals(TrailColour.ORANGE.bit(), bikeColoursOf(route("mtb", "colour", "orange")));
++    }
++
++    @Test
++    public void testUnmarkedStaysZero() {
++        assertEquals(0, hikingColoursOf(route("hiking", "network", "rwn")));
++        assertEquals(0, hikingColoursOf(route("bus", "colour", "red")));
++    }
++}
+-- 
+2.47.3
+

@@ -1,0 +1,45 @@
+// Blocks ways that OSM's conditional tags close to motor vehicles on the day
+// the graph was built. Applied to car, car4wd, carnotoll and motorcycle.
+//
+// GraphHopper 9.0 took conditional restrictions out of `car_access` and put
+// them in `car_temporal_access`, so `access:conditional=no @ (Nov 1-Apr 15)`
+// stopped closing anything by itself. This file is the restoration upstream
+// documents for that change (docs/migration/config-migration-08-09.md).
+//
+// The condition is evaluated at import, not per request:
+// OSMTemporalAccessParser resolves it against `date_range_parser_day`, which
+// defaults to the import date. Since a new extract triggers a fresh import, the
+// answer is never more than a day or so stale, and that is the whole mechanism
+// -- there is no query-time date and no way to ask for a different one.
+//
+// Blocked rather than surfaced. A seasonal closure is a closure, and a route
+// through one is wrong however it is styled; and 11.0 has no
+// `access_conditional` path detail to style it with anyway -- only this enum.
+//
+// One file per vehicle because the encoded value has to match: a winter closure
+// for cars must not stop anyone walking. `motorcycle` reads the car value since
+// there is no motorcycle-specific one, and CarTemporalAccess.CONDITIONALS
+// covers access/vehicle/motor_vehicle/motorcar -- only the last of those is
+// strictly not a motorcycle.
+//
+// The permissive direction is read too, and that is this file's sharp edge.
+// getTemporaryAccess returns the range check itself for a `yes @ (...)` value, so
+// a way tagged only `motor_vehicle:conditional=yes @ (May-Oct)`, with nothing
+// closing it the rest of the year, comes out NO in January -- and the rule below
+// then makes it unroutable all winter. That reading is right where the
+// conditional is the only thing granting access and wrong where it merely
+// restates a default. Rare, but it is the one case where this file blocks
+// something OSM does not say is closed.
+//
+// Covers dates and seasons only. DateRangeParser rejects a time-of-day rule
+// like `no @ (Mo-Fr 08:00-18:00)`, which leaves the value MISSING, and any
+// value containing `;` is skipped outright. Opening hours are not modelled.
+//
+// `car_temporal_access` must stay in `graph.encoded_values`: prepareImport
+// aborts with "Encoded values missing" when a custom model names one that the
+// config does not list.
+{
+  "priority": [
+    { "if": "car_temporal_access == NO", "multiply_by": "0" }
+  ]
+}

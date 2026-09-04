@@ -234,7 +234,7 @@ see [Building the jar](#building-the-jar).
 ## Building the jar
 
 `graphhopper-web-11.0.jar` is **not** the official release jar. Two commits are
-cherry-picked onto the 11.0 tag, and one more is applied from `patches/`.
+cherry-picked onto the 11.0 tag, and two more are applied from `patches/`.
 
 The `sonny` elevation provider was added in
 [#3183](https://github.com/graphhopper/graphhopper/pull/3183) on 2025-11-12,
@@ -264,6 +264,40 @@ into unreachable fragments. Upstream's own fix does not cherry-pick, because
 #3293 had already moved the calculation to a post-import `execute(Graph)` pass,
 so the two lines are reapplied to 11.0's `TagParser` form by hand.
 
+The fourth is ours outright, with no upstream counterpart:
+`patches/0004-trail-colours.patch` adds the encoded values `hiking_colours` and
+`bike_colours`, so a route can be drawn in the colours of the waymarked trails
+it follows. Each is a 9-bit mask — red, blue, green, yellow, black, orange,
+gray, white, and `other` for the recognisable rest (brown, purple, teal, hex
+values) — filled from the route relations an edge belongs to: `route=hiking`
+and `route=foot` for the first, `route=bicycle` and `route=mtb` for the second.
+The client asks for `details=hiking_colours` or `details=bike_colours`
+depending on the profile, and decodes the bits; a segment shared by a red and a
+green trail returns both, because relations OR into the mask rather than
+competing for it.
+
+The web app has to wait for the switchover before it starts asking. An unknown
+path detail is not ignored — `PathDetailsBuilderFactory` throws, failing the
+whole route request — so a frontend deployed ahead of the first coloured graph
+breaks routing rather than losing a colour.
+
+Colour is read from the first field of `osmc:symbol` and falls back to `colour`,
+then to the rarer `color` spelling. Both tags are needed: across Europe 69 % of `route=hiking` relations carry
+`osmc:symbol` against 18 % with `colour`, while for `route=bicycle` it is 2 %
+against 16 %.
+
+The nine bits are not arbitrary, but they are measured rather than derived. Edge
+flags are allocated in whole 4-byte ints; this exact `graph.encoded_values` list
+sits at `bytesForFlags` 22, i.e. 6 ints, and adding two 9-bit masks leaves it at
+24 bytes — still 6 ints, so they cost **nothing**. A tenth bit on both takes the
+graph to 7 ints, four more bytes on every edge.
+
+That does not follow from counting spare bits. The slack inside those six ints is
+fragmented, and `IntEncodedValueImpl.init` will not let a value straddle an int
+boundary, so whether a 9-bit mask fits depends on the whole list and on where the
+key sorts into it. Re-measure after any change to that line before widening
+either mask.
+
 Rather than run `12.0-SNAPSHOT` — ten months of unreleased changes, including
 `CustomWeighting` returning 10× its previous values, `max_speed` becoming a
 required encoded value, and country rules moving into parsers — the release is
@@ -279,22 +313,25 @@ git checkout -b 11.0-sonny-ferry-slope 11.0
 git cherry-pick 25903cd0c6cfd23e1e72da71900b26dc2cfc362f    # #3183 sonny provider
 git cherry-pick 75fb59df438bf6e536da51f4e453ad978149f355    # #3235 skip ferries
 git am < /opt/graphhopper/patches/0003-max-slope-short-segments.patch
+git am < /opt/graphhopper/patches/0004-trail-colours.patch
 mvn -DskipTests -pl web -am package
 ```
 
-The patch carries a regression test, so it is worth running that one class
-rather than trusting the build. `-DfailIfNoTests=false` is required, not
-optional: `-am` also runs the `test` phase in `web-api`, where the filter
-matches nothing and Surefire would otherwise abort the reactor.
+Both patches carry tests, so it is worth running those classes rather than
+trusting the build. `-DfailIfNoTests=false` is required, not optional: `-am`
+also runs the `test` phase in `web-api`, where the filter matches nothing and
+Surefire would otherwise abort the reactor.
 
 ```bash
-mvn -pl core -am test -Dtest=SlopeCalculatorTest -DfailIfNoTests=false
+mvn -pl core -am test -Dtest=SlopeCalculatorTest,OSMTrailColourParserTest -DfailIfNoTests=false
 ```
 
-Check all three landed. A jar silently missing one is the expensive failure: the
+Check all four landed. A jar silently missing one is the expensive failure: the
 import does not complain, it just aborts on `sonny`, quietly fattens every ferry
-line, or writes the `max_slope` sentinel that took a working stroller profile
-down to "Connection between locations not found".
+line, writes the `max_slope` sentinel that took a working stroller profile down
+to "Connection between locations not found", or — for the colours — refuses to
+start at all, since `graph.encoded_values` names two encoded values a stock jar
+has never heard of.
 
 ```bash
 J=web/target/graphhopper-web-11.0-SNAPSHOT.jar
@@ -308,6 +345,8 @@ unzip -p "$J" com/graphhopper/routing/util/SlopeCalculator.class > /tmp/SC.class
 javap -p -c /tmp/SC.class \
   | awk '/double 8.0d/{f=1} f&&/return/{exit} f' \
   | grep -c maxSlopeEnc   # must print 2; 0 means the max_slope patch is missing
+
+unzip -l "$J" | grep -c TrailColour   # must print 2; 0 means the colours patch is missing
 ```
 
 The tag's pom says `11.0-SNAPSHOT`, so the artifact has to be renamed to
@@ -328,9 +367,13 @@ data at the next **import**, which is a separate JVM invocation — so anything
 the patches change about what gets written to the graph, `max_slope` included,
 only appears once that instance has been rebuilt.
 
-Once a release contains all three — #3183, #3235 and `5697f586b40a` — this
-section goes away. Until then a release carrying only some of them still needs
-whichever checks above it does not cover. Read the 12.0 migration notes before
+Once a release contains the first three — #3183, #3235 and `5697f586b40a` —
+most of this section goes away, but not all of it. `0004-trail-colours.patch`
+has no upstream counterpart and never will be released; it has to be reapplied
+to whatever release replaces this one, or the jar refuses to start against a
+`graph.encoded_values` that names `hiking_colours`. Until then a release
+carrying only some of the three still needs whichever checks above it does not
+cover. Read the 12.0 migration notes before
 jumping, and re-verify `max_slope` on a flat urban route afterwards, since #3293
 rewrote how it is derived.
 

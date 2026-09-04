@@ -1,0 +1,11 @@
+// Blocks ways that OSM's conditional tags close to bicycles on the day the
+// graph was built. Applied to bike, racingbike, mtb, ebike and gravelbike.
+//
+// car_temporal.json carries the full explanation: why the rule is needed at
+// all, that the date is resolved at import rather than per request, why the
+// closure is blocked instead of displayed, and what the parser does not cover.
+{
+  "priority": [
+    { "if": "bike_temporal_access == NO", "multiply_by": "0" }
+  ]
+}
