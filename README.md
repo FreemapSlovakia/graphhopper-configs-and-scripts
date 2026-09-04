@@ -35,7 +35,8 @@ State kept between runs in `run/`, where `<x>` is `osm` or `photon`:
 | `<x>-mismatch.md5`    | Checksum that already failed verification once               |
 | `fail-streak`         | Consecutive recoverable failures                             |
 | `halted`              | Present = every run exits immediately until it is removed    |
-| `instance.{a,b}/`     | The config and custom models that instance's graph was built from |
+| `gtfs/`               | Latest good copy of each GTFS feed, refreshed per import     |
+| `instance.{a,b}/`     | The config, custom models and GTFS feeds that instance's graph was built from |
 | `update.lock`         | Held by a run, and by `deploy.sh` while it pulls              |
 
 ## Photon
@@ -230,6 +231,84 @@ gaps.
 
 `sonny` is in no GraphHopper release, so the deployed jar is a local build —
 see [Building the jar](#building-the-jar).
+
+## Public Transport
+
+`gtfs.file` in the config is what makes the instance PT-capable: `GraphHopperManaged`
+builds a `GraphHopperGtfs` when it is present, which adds `/route-pt` and
+`/isochrone-pt`. `PtRedirectFilter` forwards `/route?profile=pt` to the former, so
+the web app can treat it as one more entry in the profile list and nginx needs no
+new location — the vhost already proxies everything.
+
+It is not a profile, though. There is no entry under `profiles:`, no custom model,
+no CH or LM, and `pt.earliest_departure_time` is mandatory: a PT request needs a
+departure time, which no other mode does. `pt.access_profile` and
+`pt.egress_profile` pick which of our profiles walks the first and last legs, so
+passing `bike` gives bike-and-ride for free. Speed mode is untouched —
+`postProcessing` imports the timetable and then prepares CH and LM as before.
+
+### Feeds
+
+| Feed | Source | Licence |
+| ---- | ------ | ------- |
+| `zssk` | Every Slovak train, via the national open data catalogue | — |
+| `dpb`  | Dopravný podnik Bratislava, ArcGIS item behind data.bratislava.sk | **CC BY 4.0** |
+
+Both URLs are in `GTFS_FEEDS` in `gh-update.sh`, with the reasoning beside them.
+Neither is the address a feed directory will give you: the `gtfs.zip` on `zsr.sk`
+that Transitland and the Mobility Database still list redirects to a landing page
+and carries nothing, and the `opendata.bratislava.sk` URLs they list for DPB are
+dead — the city moved to an ArcGIS Hub site. The train feed is only discoverable
+through the catalogue's SPARQL endpoint at `data.slovensko.sk/api/sparql`, since
+the catalogue front end is a single-page app.
+
+DPB is **CC BY 4.0**, so freemap.sk has to credit it wherever PT results are shown,
+the same obligation the Sonny tiles carry.
+
+**Košice is not here on purpose.** `opendata.kosice.sk` publishes "Cestovný poriadok
+MHD", but the file is JDF — `CIS.ZIP` with `DOPRAVCI.TXT`, `LINKY.TXT`, `SPOJE.TXT`
+— not GTFS, and the timetable inside is dated 2022. It needs a JDF→GTFS conversion
+and a fresher source before it can be added.
+
+### How a feed reaches a graph
+
+`gh-update.sh` fetches each feed into `run/gtfs/` right after the OSM extract, and
+before the graph cache is cleared, so a feed that cannot be fetched stops the run
+while the idle instance still has the graph it would otherwise fall back on. Each
+download is validated as an intact zip carrying the files GraphHopper's GTFS reader
+needs; anything else is discarded.
+
+**A failed refresh keeps the last good copy.** A transit operator's web server
+having a bad morning is not a reason to skip a day of European routing, and a
+timetable a week stale still routes. Only the absence of any copy is fatal, because
+then the import has nothing to read.
+
+`freeze-config.sh` then pins the feeds into `run/instance.<i>/gtfs/` alongside the
+config and models, and the config points there rather than at `run/gtfs/`. Same
+reason as the models: every later run overwrites `run/gtfs/`, so a shared path
+would name files whose contents have moved on from the timetable in the graph
+beside them. A freeze whose config names `gtfs.file` and has no `gtfs/` fails
+`--check`; one written before public transport existed does not, which is what lets
+an older graph still start.
+
+Feeds refresh only on runs that have new OSM data, since the run exits earlier when
+there is none. Geofabrik publishes daily and neither feed changes more than weekly,
+so a timetable is never more than a day behind its source — which is what allows
+public transport to live on this graph rather than an instance of its own.
+
+### Expected log noise
+
+The DPB feed tags its 15 trolleybus routes `route_type=11`, which is valid in the
+extended GTFS spec but outside the 0–7 range the bundled `com.conveyal.gtfs` reader
+validates against. Each one logs
+
+```
+ERROR com.conveyal.gtfs.GTFSFeed: routes line N: Number 11.0 in field null outside of acceptable range [0.0,7.0]
+```
+
+at import. They are cosmetic — the routes load. Verified by reading the built graph
+back: all 92 DPB routes are present, `byRouteType={0=4, 3=73, 11=15}`, 37160 trips
+across 1366 stops, alongside 2177 rail routes and 2312 trips from ZSSK.
 
 ## Building the jar
 

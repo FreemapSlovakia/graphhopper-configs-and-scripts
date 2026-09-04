@@ -64,6 +64,15 @@ dest="run/instance.${instance}"
 complete=0
 if [[ -f "$dest/config.yml" && -d "$dest/custom_models" ]]; then
   complete=1
+
+  # The GTFS feeds count as a third half, but only for a freeze that asks for
+  # them. Read from the frozen config rather than the template on purpose: a
+  # freeze written before public transport existed has no gtfs.file and must
+  # still pass, because graphhopper@.service runs --check on every start and
+  # tightening this unconditionally would strand every graph that predates it.
+  if grep -q '^[[:space:]]*gtfs\.file:' "$dest/config.yml" && [ ! -d "$dest/gtfs" ]; then
+    complete=0
+  fi
 fi
 
 if [ "$mode" = check ]; then
@@ -97,6 +106,17 @@ mkdir -p "$staging"
 
 cp "config-freemap.${instance}.yml" "$staging/config.yml"
 cp -r custom_models "$staging/custom_models"
+
+# The timetables this graph is about to be built from, pinned for a blunter
+# reason than the config: run/gtfs/ is overwritten by every later run, so a
+# config naming files there would, a day later, name files whose contents have
+# moved on from the graph beside it. gh-update.sh fetches them just before
+# calling this; deploy.sh's --if-missing path can run when none have been
+# fetched yet, which is why finding none is not an error here.
+if compgen -G 'run/gtfs/*.zip' > /dev/null; then
+  mkdir -p "$staging/gtfs"
+  cp run/gtfs/*.zip "$staging/gtfs/"
+fi
 
 rm -rf "$dest"
 mv -T "$staging" "$dest"
