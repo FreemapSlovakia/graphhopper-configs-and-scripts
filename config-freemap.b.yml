@@ -20,7 +20,7 @@ graphhopper:
   # finds the timetable already in the graph, so an instance comes back even if
   # these files were removed -- though freeze-config.sh --check will not vouch
   # for a freeze that names them and does not have them.
-  gtfs.file: run/instance.b/gtfs/zssk.zip,run/instance.b/gtfs/dpb.zip
+  gtfs.file: run/instance.b/gtfs/zssk.zip,run/instance.b/gtfs/dpb.zip,run/instance.b/gtfs/presov.zip
 
   ##### Routing Profiles ####
 

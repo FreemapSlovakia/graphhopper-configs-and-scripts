@@ -72,6 +72,13 @@ GTFS_FEEDS=(
   # formáte GTFS"; the opendata.bratislava.sk URLs that Transitland and the
   # Mobility Database still publish are dead.
   "dpb|https://www.arcgis.com/sharing/rest/content/items/aba12fd2cbac4843bc7406151bc66106/data"
+  # Dopravný podnik mesta Prešov, CC BY 4.0, published for them by R&G PLUS.
+  # Same ArcGIS pattern as Bratislava. Its calendar runs about three months at a
+  # time, against DPB's four and ZSSK's twelve, so this is the feed that goes
+  # quiet first if a publisher is ever late renewing -- the import stays green
+  # either way, because a lapsed calendar is not an error, it is simply a feed
+  # with no departures left.
+  "presov|https://www.arcgis.com/sharing/rest/content/items/f1033ca6c2f4461d9aba285e1c7cb079/data"
 )
 
 # A feed is usable only if it is an intact zip carrying the files GraphHopper's

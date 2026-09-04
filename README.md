@@ -253,6 +253,7 @@ passing `bike` gives bike-and-ride for free. Speed mode is untouched —
 | ---- | ------ | ------- |
 | `zssk` | Every Slovak train, via the national open data catalogue | — |
 | `dpb`  | Dopravný podnik Bratislava, ArcGIS item behind data.bratislava.sk | **CC BY 4.0** |
+| `presov` | Dopravný podnik mesta Prešov, ArcGIS item, published by R&G PLUS | **CC BY 4.0** |
 
 Both URLs are in `GTFS_FEEDS` in `gh-update.sh`, with the reasoning beside them.
 Neither is the address a feed directory will give you: the `gtfs.zip` on `zsr.sk`
@@ -262,8 +263,24 @@ dead — the city moved to an ArcGIS Hub site. The train feed is only discoverab
 through the catalogue's SPARQL endpoint at `data.slovensko.sk/api/sparql`, since
 the catalogue front end is a single-page app.
 
-DPB is **CC BY 4.0**, so freemap.sk has to credit it wherever PT results are shown,
-the same obligation the Sonny tiles carry.
+DPB and Prešov are both **CC BY 4.0**, so freemap.sk has to credit them wherever PT
+results are shown, the same obligation the Sonny tiles carry.
+
+Feeds carry their own validity and do not clamp each other: `GtfsReader` builds each
+trip's validity from its own feed's calendar. The "Calendar range covered by all
+feeds" line at import is the intersection of them all and is **logged only** — a
+short or lapsed feed does not shorten the others. What a lapsed feed does do is
+contribute stops with no departures, since GTFS has no way to say "runs
+indefinitely": an operator has to republish with extended dates, and until they do,
+those services simply do not exist as far as any router is concerned. Prešov's
+calendar covers about three months at a time against DPB's four and ZSSK's twelve,
+so it is the one to check first if Prešov goes quiet.
+
+**IDS BK is not here yet.** The regional buses around Bratislava would be the
+biggest coverage win left — 67 routes over 1114 stops — but the feed's official
+source is a Google Drive *folder* rather than a stable file URL, and the
+third-party mirrors carry a calendar that lapsed on 2026-08-31. It needs a durable
+URL and a live calendar before it is worth importing.
 
 **Košice is not here on purpose.** `opendata.kosice.sk` publishes "Cestovný poriadok
 MHD", but the file is JDF — `CIS.ZIP` with `DOPRAVCI.TXT`, `LINKY.TXT`, `SPOJE.TXT`
