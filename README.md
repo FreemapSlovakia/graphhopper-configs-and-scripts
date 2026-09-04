@@ -247,6 +247,13 @@ departure time, which no other mode does. `pt.access_profile` and
 passing `bike` gives bike-and-ride for free. Speed mode is untouched —
 `postProcessing` imports the timetable and then prepares CH and LM as before.
 
+`patches/0005` adds `pt.blocked_route_types`, a bitmask of GTFS `route_type`s to
+leave out: `4` drops rail, `8` drops buses. Our feeds map onto modes cleanly enough
+for that to be useful — ZSSK is entirely `route_type=2`, DPB is tram, bus and
+trolleybus — but it cannot separate Bratislava's buses from Prešov's, since both
+are `route_type=3`. They do not overlap geographically, so in practice that costs
+nothing.
+
 ### Feeds
 
 | Feed | Source | Licence |
@@ -330,7 +337,7 @@ across 1366 stops, alongside 2177 rail routes and 2312 trips from ZSSK.
 ## Building the jar
 
 `graphhopper-web-11.0.jar` is **not** the official release jar. Two commits are
-cherry-picked onto the 11.0 tag, and two more are applied from `patches/`.
+cherry-picked onto the 11.0 tag, and three more are applied from `patches/`.
 
 The `sonny` elevation provider was added in
 [#3183](https://github.com/graphhopper/graphhopper/pull/3183) on 2025-11-12,
@@ -394,6 +401,16 @@ boundary, so whether a 9-bit mask fits depends on the whole list and on where th
 key sorts into it. Re-measure after any change to that line before widening
 either mask.
 
+The fifth is a candidate for upstream rather than something to carry:
+`patches/0005-pt-blocked-route-types.patch` exposes `pt.blocked_route_types` on
+`/route-pt`. `Request` has carried `blockedRouteTypes` for years, all three
+`PtRouter` implementations honour it, and `PtIsochroneResource` already publishes
+it under exactly that name — only `PtRouteResource` never wired it up, so a caller
+can exclude a mode from an isochrone but not from a journey. Four lines and two
+tests. **Send it upstream before treating it as ours**: if it is merged this
+becomes a backport that disappears at the next release, like the three above it,
+rather than a second patch we own forever.
+
 Rather than run `12.0-SNAPSHOT` — ten months of unreleased changes, including
 `CustomWeighting` returning 10× its previous values, `max_speed` becoming a
 required encoded value, and country rules moving into parsers — the release is
@@ -410,6 +427,7 @@ git cherry-pick 25903cd0c6cfd23e1e72da71900b26dc2cfc362f    # #3183 sonny provid
 git cherry-pick 75fb59df438bf6e536da51f4e453ad978149f355    # #3235 skip ferries
 git am < /opt/graphhopper/patches/0003-max-slope-short-segments.patch
 git am < /opt/graphhopper/patches/0004-trail-colours.patch
+git am < /opt/graphhopper/patches/0005-pt-blocked-route-types.patch
 mvn -DskipTests -pl web -am package
 ```
 
@@ -420,6 +438,7 @@ Surefire would otherwise abort the reactor.
 
 ```bash
 mvn -pl core -am test -Dtest=SlopeCalculatorTest,OSMTrailColourParserTest -DfailIfNoTests=false
+mvn -pl web  -am test -Dtest=PtRouteResourceTest -DfailIfNoTests=false
 ```
 
 Check all four landed. A jar silently missing one is the expensive failure: the
