@@ -1,0 +1,32 @@
+// Ours, replacing the jar's hike.json rather than layering on it. Same reasoning
+// as fm_foot.json, which carries it; the additions are in the files stacked after
+// this one.
+//
+// Upstream's rules verbatim. It differs from foot.json in three ways: it tolerates
+// far harder terrain (hike_rating >= 6 blocks rather than >= 2), it has no
+// mtb_rating clause, and it slows down on rough ground instead of holding
+// foot_average_speed throughout.
+//
+// The foot_network boosts are upstream's too, and they are the one thing here
+// worth revisiting. They multiply whatever the way is, and FootPriorityParser has
+// already flattened that: measured on a real route, `path` in a regional network
+// reads foot_priority 1.0 where an unmarked path reads 1.2, and `secondary` in the
+// same network also reads 1.0 where an unmarked one reads 0.8. So a waymarked
+// trail is demoted, a waymarked road is promoted, and the 1.5 below then lifts
+// both alike -- which is a good candidate for why hiking routes follow roads more
+// than they should. Left as upstream has it, because scoping the boost to
+// non-road classes is a behaviour change that wants its own measurement.
+{
+  "priority": [
+    { "if": "!foot_access || hike_rating >= 6", "multiply_by": "0"},
+    { "else": "", "multiply_by": "foot_priority"},
+    { "if": "foot_road_access == PRIVATE", "multiply_by": "0.1" },
+    { "if": "foot_network == INTERNATIONAL || foot_network == NATIONAL", "multiply_by": "1.7"},
+    { "else_if": "foot_network == REGIONAL || foot_network == LOCAL", "multiply_by": "1.5"}
+  ],
+  "speed": [
+    { "if": "hike_rating < 1", "limit_to": "foot_average_speed" },
+    { "else_if": "hike_rating > 2", "limit_to": "1.5" },
+    { "else":   "", "limit_to": "4" }
+  ]
+}

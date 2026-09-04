@@ -60,10 +60,10 @@ graphhopper:
       custom_model_files: [car4wd.json, car_temporal.json]
 
     - name: foot
-      custom_model_files: [foot.json, foot_elevation.json, foot_temporal.json]
+      custom_model_files: [fm_foot.json, foot_elevation.json, foot_carriageway.json, foot_temporal.json]
 
     - name: hike
-      custom_model_files: [hike.json, foot_elevation.json, foot_temporal.json]
+      custom_model_files: [fm_hike.json, foot_elevation.json, foot_carriageway.json, foot_temporal.json]
 
     - name: bike
       custom_model_files: [bike.json, bike_elevation.json, bike_temporal.json]
@@ -94,10 +94,10 @@ graphhopper:
       custom_model_files: [bike.json, bike_elevation.json, gravelbike.json, bike_temporal.json]
 
     - name: stroller
-      custom_model_files: [foot.json, foot_elevation.json, stroller.json, foot_temporal.json]
+      custom_model_files: [fm_foot.json, foot_elevation.json, stroller.json, foot_carriageway.json, foot_temporal.json]
 
     - name: easyhike
-      custom_model_files: [hike.json, foot_elevation.json, easyhike.json, foot_temporal.json]
+      custom_model_files: [fm_hike.json, foot_elevation.json, easyhike.json, foot_carriageway.json, foot_temporal.json]
 
   #    # See the bus.json for more details.
   #    - name: bus

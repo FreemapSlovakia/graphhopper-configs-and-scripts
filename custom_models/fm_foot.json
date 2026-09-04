@@ -1,0 +1,39 @@
+// Ours, replacing the jar's foot.json rather than layering on it. Every rule
+// below is upstream's, verbatim; the additions live in the files stacked after
+// it -- foot_carriageway.json for the road ladder, foot_temporal.json for the
+// conditional closures.
+//
+// Copied rather than referenced because the built-in is not stable: #3226 has
+// already moved route handling out of bike.json into custom models upstream, and
+// the same could happen here. An instance whose walking routes change because the
+// jar was rebuilt for an elevation provider is not something we would notice for
+// weeks. This way an upgrade produces a diff to read instead of a silent change
+// -- at the cost of having to read that diff. Worth doing at each jar rebuild:
+//
+//   for f in foot hike; do
+//     diff <(sed -n '/^{/,$p' <ghsrc>/core/src/main/resources/com/graphhopper/custom_models/$f.json) \
+//          <(sed -n '/^{/,$p' custom_models/fm_$f.json)
+//   done
+//
+// The rule bodies below are byte-identical to upstream's, so that diff is silent
+// until upstream changes something -- which is the only way it is any use.
+//
+// `multiply_by: foot_priority` is the rule that cannot be replaced.
+// FootPriorityParser is Java, and its output is the only representation we have
+// of foot=designated, foot=use_sidepath, sidewalk=no|none|separate,
+// bicycle=designated and "maxspeed <= 20 counts as safe". None of those is an
+// encoded value in 11.0, so a model written without foot_priority would be
+// blunter, not cleaner -- it would be left ranking walking by road_class alone.
+{
+  "priority": [
+    { "if": "!foot_access || hike_rating >= 2", "multiply_by": "0" },
+    { "else": "", "multiply_by": "foot_priority"},
+    { "if": "country == DEU && road_class == BRIDLEWAY && foot_road_access != YES", "multiply_by": "0" },
+    // note that mtb_rating=0 is the default and mtb_rating=1 corresponds to mtb:scale=0 and so on
+    { "if": "mtb_rating > 3", "multiply_by": "0.7" },
+    { "if": "foot_road_access == PRIVATE", "multiply_by": "0.1" }
+  ],
+  "speed": [
+    { "if": "true", "limit_to": "foot_average_speed" }
+  ]
+}

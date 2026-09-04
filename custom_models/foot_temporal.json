@@ -1,11 +1,23 @@
 // Blocks ways that OSM's conditional tags close to pedestrians on the day the
 // graph was built. Applied to foot, hike, stroller and easyhike.
 //
-// car_temporal.json carries the full explanation. The one judgement specific to
-// this file: upstream suggests a hint rather than a block for foot, on the
-// grounds that pedestrian conditionals are often minor. We block anyway, for
-// consistency with the other two and because the alternative needs a path
-// detail the web app would have to render -- and 11.0 has no
+// Separate from foot_carriageway.json on purpose, even though the two go on
+// exactly the same four profiles. This is an access rule -- it takes a way out of
+// the graph for everyone -- while that one only says which of the ways you may
+// use are nicer to walk on. Merging them would put a
+// multiply_by 0 in the middle of a list of preferences, which is the kind of
+// thing that gets tuned by accident later. It also keeps the three vehicles
+// symmetrical: car_temporal.json and bike_temporal.json are their own files too.
+//
+// car_temporal.json carries the full explanation of the mechanism: the date is
+// resolved at import against date_range_parser_day, dates and seasons only, and
+// the permissive direction is read too, so a way tagged only
+// `foot:conditional=yes @ (May-Oct)` comes out NO in January.
+//
+// The one judgement specific to this file: upstream suggests a hint rather than a
+// block for foot, on the grounds that pedestrian conditionals are often minor. We
+// block anyway, for consistency with the other two and because the alternative
+// needs a path detail the web app would have to render -- and 11.0 has no
 // `access_conditional` detail to render.
 {
   "priority": [

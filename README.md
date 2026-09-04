@@ -232,6 +232,74 @@ gaps.
 `sonny` is in no GraphHopper release, so the deployed jar is a local build —
 see [Building the jar](#building-the-jar).
 
+## Pedestrian Routing
+
+The four pedestrian profiles read our own copies of GraphHopper's models rather
+than the jar's:
+
+| file | what it is |
+| ---- | ---------- |
+| `fm_foot.json` | the jar's `foot.json`, rule bodies byte-identical |
+| `fm_hike.json` | the jar's `hike.json`, likewise |
+| `foot_carriageway.json` | ours — how much worse a carriageway is than a footway |
+| `foot_temporal.json` | ours — conditional closures, an access rule |
+
+```
+foot      → fm_foot.json, foot_elevation.json, foot_carriageway.json, foot_temporal.json
+hike      → fm_hike.json, foot_elevation.json, foot_carriageway.json, foot_temporal.json
+stroller  → fm_foot.json, foot_elevation.json, stroller.json, foot_carriageway.json, foot_temporal.json
+easyhike  → fm_hike.json, foot_elevation.json, easyhike.json, foot_carriageway.json, foot_temporal.json
+```
+
+Copied rather than referenced because the built-ins are not stable — #3226 already
+moved route handling out of `bike.json` into custom models upstream — and walking
+routes changing because the jar was rebuilt for an elevation provider is not
+something we would notice for weeks. The cost is a diff to read at each jar
+rebuild; it belongs in the build checklist below, and the bodies are kept
+byte-identical so that diff stays silent until upstream actually changes
+something.
+
+`multiply_by: foot_priority` is the one rule that cannot be rewritten out.
+`FootPriorityParser` is Java, and its output is the only representation we have of
+`foot=designated`, `foot=use_sidepath`, `sidewalk=no|none|separate`,
+`bicycle=designated` and "maxspeed ≤ 20 counts as safe". None of those is an
+encoded value in 11.0.
+
+### The road ladder
+
+Where sidewalks are mapped as separate footways rather than as `sidewalk=*` on the
+road, the road centreline is shorter and straighter than the sidewalk with its
+detours via crossings, so the router walks pedestrians down the road. Reproduced
+at Repašského, Bratislava (`48.189755/17.032993 → 48.190370/17.036051`): the route
+ran `footway ×12 → tertiary → residential → footway`. The ladder makes it 267 m of
+footway throughout, 9 m longer.
+
+Effective values, `foot_priority` × the ladder:
+
+| | |
+| --- | --- |
+| footway, pedestrian, path, track, steps, living_street | 1.20 |
+| residential | 1.14 |
+| service | 1.08 |
+| unclassified | 1.00 |
+| tertiary | 0.95 *(0.76 if `sidewalk=no\|none\|separate`)* |
+| secondary | 0.56 *(0.35)* |
+| primary | 0.40 *(0.25)* |
+
+Every value is measured rather than chosen — the sweep, and why `tertiary` is 0.95
+and not 0.9, is in `foot_carriageway.json`. Two properties worth keeping if anyone
+retunes it: it only ever multiplies by ≤ 1, which is the shape a *query* custom
+model is allowed to have, and it leaves `path` and `track` at what
+`foot_priority` gives them, so a hiker still prefers a path (1.20) to a tertiary
+road (0.95).
+
+The bracketed values are the ones GraphHopper ought to use far more often than it
+does. `FootPriorityParser` reads only the legacy `sidewalk` key, so
+`sidewalk:both=separate` — now the commoner spelling in Europe, 272k ways against
+242k — is invisible, and the road is promoted two rungs instead of demoted. That
+is the actual cause of the Repašského case; the ladder compensates for it. See
+[graphhopper/graphhopper#3042](https://github.com/graphhopper/graphhopper/pull/3042).
+
 ## Public Transport
 
 `gtfs.file` in the config is what makes the instance PT-capable: `GraphHopperManaged`
@@ -440,6 +508,19 @@ Surefire would otherwise abort the reactor.
 mvn -pl core -am test -Dtest=SlopeCalculatorTest,OSMTrailColourParserTest -DfailIfNoTests=false
 mvn -pl web  -am test -Dtest=PtRouteResourceTest -DfailIfNoTests=false
 ```
+
+Then diff the two pedestrian models we carry copies of, since nothing else will
+tell you they moved:
+
+```bash
+for f in foot hike; do
+  diff <(sed -n '/^{/,$p' core/src/main/resources/com/graphhopper/custom_models/$f.json) \
+       <(sed -n '/^{/,$p' /opt/graphhopper/custom_models/fm_$f.json)
+done
+```
+
+Silence means upstream has not touched them. Output means deciding what to take —
+see [Pedestrian Routing](#pedestrian-routing).
 
 Check all four landed. A jar silently missing one is the expensive failure: the
 import does not complain, it just aborts on `sonny`, quietly fattens every ferry

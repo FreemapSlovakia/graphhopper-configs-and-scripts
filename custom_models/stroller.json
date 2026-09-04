@@ -61,8 +61,16 @@
 // shortcut after nineteen metres. The floors below keep the worst compounded
 // product at 0.06 x 0.08 x 0.15 = 7.2e-4, which at the 3 km/h floor is ~1670 per
 // metre and so survives a 2.5 km shortcut — the same headroom the previous
-// two-tier model had. Check `numShortcutsExceedingWeight` in the import log
-// before lowering any of them.
+// two-tier model had.
+//
+// That headroom is now halved from outside this file. foot_carriageway.json
+// stacks onto this profile and multiplies by as little as 0.5 on primary, so the
+// worst compounded product is 3.6e-4, ~3340 per metre, and a shortcut survives
+// about 1.25 km rather than 2.5 km. Still far from the 19 m of the draft that
+// failed, but the margin is no longer what the paragraph above assumed, and it
+// shrinks again if that ladder is ever deepened. Check
+// `numShortcutsExceedingWeight` in the import log before lowering anything in
+// either file.
 //
 // A hard 0 is *not* the same hazard: infinity excludes the edge from
 // contraction outright, which is why STEPS and `impassable` stay at 0.

@@ -1,0 +1,67 @@
+// Which of the ways you may walk on are nicer to walk on. Stacked after
+// fm_foot.json or fm_hike.json by all four pedestrian profiles; never by a
+// vehicle. Nothing references it -- custom_model_files in the config is what
+// stacks it.
+//
+// Its own file because both bases want exactly this ladder and nothing about it
+// is specific to either. Separate from foot_temporal.json for the opposite
+// reason: that one takes ways out of the graph, this one only ranks them.
+//
+// The problem, from Laci. Where sidewalks are mapped as separate footways rather
+// than as sidewalk=* on the road, the road centreline is shorter and straighter
+// than the sidewalk with its detours via crossings, so the router puts
+// pedestrians on the road. Reproduced at Repašského, Bratislava,
+// 48.189755/17.032993 -> 48.190370/17.036051: the route ran footway x12 ->
+// tertiary -> residential -> footway. With this ladder it is 267 m of footway
+// throughout, 9 m longer.
+//
+// A penalty, not a ban: in a village with no mapped sidewalk the carriageway is
+// the only way through, and a ban would answer "Connection between locations not
+// found" instead of routing.
+//
+// Only decreases, never a boost. Raising footway instead works just as well --
+// x1.1 fixes the junction and a 12.7 km rural route does not move until x1.5 --
+// but a model that only multiplies by <= 1 keeps the shape a query custom model
+// is allowed to have (FindMinMax.checkLMConstraints caps those at 1), so these
+// rules could later be sent per request against an LM profile unchanged.
+//
+// Measured, not guessed:
+//
+//   tertiary 0.7    junction fixed   rural foot 15718 m   +23.8 %
+//   tertiary 0.8    junction fixed   rural foot 13387 m   +5.4 %
+//   tertiary 0.9    junction fixed   rural foot 12698 m   unchanged
+//
+// 0.95 rather than 0.9 because of hiking: both fix the junction, but on a 12.6 km
+// rural hike route 0.9 costs +2.4 km (+19 %) and 0.95 costs 4 m. The junction
+// never needed the stronger value. An earlier attempt -- a flat 0.35 across seven
+// classes -- also fixed the junction but cost +22.7 % on a rural foot route, and
+// was worse in kind: it pushed the route off footway and residential onto
+// secondary, because penalising a housing street as hard as a trunk road leaves
+// the trunk road looking no worse.
+//
+// living_street is absent deliberately: shared space where pedestrians have right
+// of way and no sidewalk is expected. So are path, track and steps, which keep
+// what foot_priority gives them (1.2) -- a hiker would rather take a path than a
+// tertiary road, and 1.2 against 0.95 is what makes that happen.
+//
+// Effective values, foot_priority x this file:
+//   footway, pedestrian, path, track, steps, living_street   1.20
+//   residential 1.14   service 1.08   unclassified 1.00
+//   tertiary 0.95 (0.76 if sidewalk=no|none|separate)
+//   secondary 0.56 (0.35)   primary 0.40 (0.25)
+//
+// The bracketed values are the ones GraphHopper should be using far more often
+// than it does: FootPriorityParser reads only the legacy `sidewalk` key, so
+// `sidewalk:both=separate` -- now the more common spelling in Europe -- is
+// invisible and the road is promoted two rungs instead of demoted. That is the
+// actual cause of Laci's junction; this ladder compensates for it. See
+// graphhopper/graphhopper#3042.
+{
+  "priority": [
+    { "if":      "road_class == PRIMARY",     "multiply_by": "0.5" },
+    { "else_if": "road_class == SECONDARY",   "multiply_by": "0.7" },
+    { "else_if": "road_class == TERTIARY",    "multiply_by": "0.95" },
+    { "else_if": "road_class == RESIDENTIAL", "multiply_by": "0.95" },
+    { "else_if": "road_class == SERVICE",     "multiply_by": "0.9" }
+  ]
+}
