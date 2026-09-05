@@ -177,9 +177,9 @@ resolve_data_dir "graph-cache.${next}"
 cache_dir="$data_dir"
 assert_instance_idle "graphhopper@${next}"
 
-# The instance is idle and about to be rebuilt, so this is the moment the config
-# and the models its graph will be built from get pinned to it for good. Both
-# the import below and graphhopper@${next} then read the freeze, never the
+# The instance is idle and about to be rebuilt, so this is the moment the config,
+# the models and the jar its graph will be built from get pinned to it for good.
+# Both the import below and graphhopper@${next} then read the freeze, never the
 # templates, so a pull landing later cannot leave the two disagreeing.
 #
 # Before the cache is cleared rather than after: if this fails there is no
@@ -190,7 +190,11 @@ assert_instance_idle "graphhopper@${next}"
 { mkdir -p "$cache_dir" && find "$cache_dir" -mindepth 1 -delete; } \
   || hard_fail "Could not clear the graph cache at $cache_dir"
 
-java -Xms2g -Xmx64g -jar graphhopper-web-11.0.jar import "run/instance.${next}/config.yml" \
+# The jar just frozen, so the graph is written by the one that will serve it —
+# a jar installed while this runs belongs to the next import, not to this graph.
+# The frozen copy carries no version in its name, so this line survives a bump.
+java -Xms2g -Xmx64g -jar "run/instance.${next}/graphhopper.jar" \
+  import "run/instance.${next}/config.yml" \
   || hard_fail "GraphHopper import into instance ${next} failed"
 
 echo "Starting: $next"

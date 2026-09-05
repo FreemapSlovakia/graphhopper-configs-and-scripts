@@ -14,7 +14,7 @@ import into the idle instance, health-check it, flip nginx, retire the old one
 | `common.sh`        | Shared scaffolding: failure classification, halting, retries, downloads |
 | `gh-update.sh`     | GraphHopper: OSM extract → import → switchover                          |
 | `photon-update.sh` | Photon: JSONL dump → import → switchover                                |
-| `freeze-config.sh` | Pins a config and custom models to the graph being built                |
+| `freeze-config.sh` | Pins the config, models, jar and feeds to the graph being built         |
 | `deploy.sh`        | `git pull` that waits for the gap between imports                       |
 | `notify.sh`        | Sends one Mailgun email (subject + body on stdin, or `--abrupt`)        |
 
@@ -36,7 +36,7 @@ State kept between runs in `run/`, where `<x>` is `osm` or `photon`:
 | `fail-streak`         | Consecutive recoverable failures                             |
 | `halted`              | Present = every run exits immediately until it is removed    |
 | `gtfs/`               | Latest good copy of each GTFS feed, refreshed per import     |
-| `instance.{a,b}/`     | The config, custom models and GTFS feeds that instance's graph was built from |
+| `instance.{a,b}/`     | The config, custom models, jar and GTFS feeds that instance's graph was built from |
 | `update.lock`         | Held by a run, and by `deploy.sh` while it pulls              |
 
 ## Photon
@@ -554,8 +554,10 @@ unzip -l "$J" | grep -c TrailColour   # must print 2; 0 means the colours patch 
 ```
 
 The tag's pom says `11.0-SNAPSHOT`, so the artifact has to be renamed to
-`graphhopper-web-11.0.jar` — both `graphhopper@.service` and `gh-update.sh`
-hardcode that name.
+`graphhopper-web-11.0.jar` — the one place that name is written down is the
+`jar=` line in `freeze-config.sh`, which is what a version bump edits. Neither
+`graphhopper@.service` nor `gh-update.sh` names a version any more: both run the
+frozen copy, which is always `run/instance.<i>/graphhopper.jar`.
 
 Install it by **rename, not in place**: a running instance holds the jar open,
 and truncating it under the JVM breaks lazy class loading.
@@ -565,11 +567,53 @@ sudo install -o freemap -g freemap -m 644 new.jar /opt/graphhopper/.gh-new.jar
 sudo mv -f /opt/graphhopper/.gh-new.jar /opt/graphhopper/graphhopper-web-11.0.jar
 ```
 
-The new jar takes effect for *serving* at the next instance start, which the
-update script does as part of its normal switchover. It takes effect for the
-data at the next **import**, which is a separate JVM invocation — so anything
-the patches change about what gets written to the graph, `max_slope` included,
-only appears once that instance has been rebuilt.
+That installs the **template**. Nothing runs it: like the config and the models,
+the jar is frozen per instance at `run/instance.<i>/`, and both the import and
+`graphhopper@<i>` read the freeze. So a jar installed now takes effect at the
+next **import**, for the data and for the serving of that graph alike — and a
+live instance goes on restarting into the jar its own graph was built by, however
+many times the template is replaced meanwhile.
+
+That is the point. The jar decides what the encoded values in a graph *mean*, so
+the two can part company in both directions: patch 0004 swapping the `GRAY` bit
+for `PURPLE` leaves an older graph loading fine and serving the wrong colour,
+while a jar that has lost an encoded value the frozen config names refuses to
+start at all. Freezing it makes "which jar built this graph" a fact on disk
+rather than whatever was last installed.
+
+To put a new jar in front of traffic sooner than the next timer run, import:
+there is no supported way to swap the jar under a serving graph, because there is
+no way to know it still means the same thing.
+
+**Migrating a freeze written before the jar was part of one** — a one-off, and
+only for instances whose freeze predates this.
+
+Do it in the same sitting as the `deploy.sh` that pulls this, not "before
+installing the new unit": `ExecStartPre=… --check %i` is already in the running
+unit, so a freeze becomes incomplete the moment the new `freeze-config.sh`
+arrives, whether or not `graphhopper@.service` has been reinstalled. From then
+until this runs, the live instance cannot come back from a restart. `deploy.sh`
+exits non-zero on the unit comparison right after that pull and prints only the
+install command, so this block will not come to you — come to it.
+
+The live side only, and `deploy.sh` names it the same way, from the nginx
+symlink. Copying the checkout's jar in is honest there because the unit read
+that same path directly before freezes held a jar — but only if no jar has been
+installed by rename since that instance last started, since the running JVM
+keeps its old inode while the checkout gets a new file. If one has, import
+instead. The idle side is not running anything, so nothing about it can be
+attested here; its next import writes a whole freeze.
+
+```bash
+cd /opt/graphhopper
+live="$(readlink graphhopper.freemap.sk)"; live="${live##*.}"
+sudo -u freemap cp graphhopper-web-11.0.jar "run/instance.$live/graphhopper.jar"
+sudo -u freemap ./freeze-config.sh --check "$live"
+```
+
+`freeze-config.sh --if-missing` does the same thing on its own from the next
+deploy onward — it completes a freeze in place rather than rewriting one — so
+this is only needed for the deploy that lands the change itself.
 
 Once a release contains the first three — #3183, #3235 and `5697f586b40a` —
 most of this section goes away, but not all of it. `0004-trail-colours.patch`
@@ -673,7 +717,9 @@ systemctl daemon-reload
 # It needs a freeze first — ExecStartPre asserts one rather than inventing it,
 # so an instance with no run/instance.<i>/ will not start. Creating it from
 # today's templates is only honest if this graph was built from this checkout;
-# if the graph came from a backup, restore its freeze alongside it instead.
+# if the graph came from a backup, restore its freeze alongside it instead — and
+# if that backup predates the jar being frozen, `--if-missing` completes it in
+# place rather than rewriting what the backup holds.
 sudo -u freemap ./freeze-config.sh a
 systemctl enable --now graphhopper@a.service
 

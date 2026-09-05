@@ -22,7 +22,14 @@ WorkingDirectory=/opt/graphhopper
 # company, and writing one from today's templates would invent an answer nobody
 # checked — once every RestartSec, indefinitely. Fail loudly instead.
 ExecStartPre=/opt/graphhopper/freeze-config.sh --check %i
-ExecStart=java -Xms1g -Xmx4g -jar graphhopper-web-11.0.jar server run/instance.%i/config.yml
+# The frozen jar, not the checkout's: it decides what the encoded values in this
+# graph mean, so replacing the template must not change what a serving instance
+# restarts into. --check above is what guarantees this path exists.
+#
+# Named without a version on purpose. freeze-config.sh freezes the versioned
+# template under this fixed name, so bumping the jar does not have to be done
+# here and in every existing freeze at the same instant.
+ExecStart=java -Xms1g -Xmx4g -jar run/instance.%i/graphhopper.jar server run/instance.%i/config.yml
 Restart=on-failure
 RestartSec=30
 
