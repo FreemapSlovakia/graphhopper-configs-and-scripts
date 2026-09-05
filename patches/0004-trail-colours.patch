@@ -24,11 +24,16 @@ is 2 % against 16 %. Reading either tag alone would miss most of one mode. An
 unparsable symbol field falls through to the colour tag rather than stopping,
 so a value like 'greenbl' cannot hide a good colour=green beside it.
 
-Nine bits: the eight colours that actually occur on European route relations
-(red, blue, green, yellow, black, orange, gray, white) plus OTHER for the
-recognisable rest -- brown, purple, teal and the hex values. Those are each too
+Nine bits: the eight colours the outdoor map renderer draws a line of its own
+for (red, blue, green, yellow, black, orange, purple, white) plus OTHER for the
+recognisable rest -- grey, brown, teal and the hex values. Those are each too
 rare to justify a bit, but collapsing them keeps such a way marked instead of
-dropping it. grey and gray share a bit; both spellings are live.
+dropping it, and the renderer draws them all in one grey anyway. violet and
+purple share a bit; both spellings are live.
+
+The set is the renderer's on purpose: a route the web app draws over these
+trails is coloured from the same eight names, so it matches the map under it
+rather than sitting beside it in a second red.
 
 MTB folds into bike_colours rather than taking a third mask: 16k route=mtb
 relations in Europe against 245k route=hiking, only 4k of them coloured, and a
@@ -198,13 +203,13 @@ index 000000000..b16cf0bf7
 + * {@link HikingColours} and {@link BikeColours} masks, because a way commonly carries several
 + * routes of different colours and every one of them is worth showing.
 + * <p>
-+ * The eight named colours are the ones that actually occur on European route relations; everything
-+ * else recognisable as a colour - the rarer names and the hex values - collapses into OTHER, which
++ * The eight named colours are the ones a renderer draws a line of its own for; everything else
++ * recognisable as a colour - grey, the rarer names, the hex values - collapses into OTHER, which
 + * keeps such a way marked without spending a bit per long tail value.
 + */
 +public enum TrailColour {
 +
-+    RED, BLUE, GREEN, YELLOW, BLACK, ORANGE, GRAY, WHITE, OTHER;
++    RED, BLUE, GREEN, YELLOW, BLACK, ORANGE, PURPLE, WHITE, OTHER;
 +
 +    /**
 +     * Bits needed to store any combination of these.
@@ -212,7 +217,7 @@ index 000000000..b16cf0bf7
 +    public static final int BITS = values().length;
 +
 +    private static final Collection<String> OTHER_NAMES = new HashSet<>(Arrays.asList(
-+            "brown", "purple", "violet", "teal", "cyan", "aqua", "pink", "magenta", "fuchsia",
++            "gray", "grey", "brown", "teal", "cyan", "aqua", "pink", "magenta", "fuchsia",
 +            "maroon", "olive", "navy", "lime", "silver", "gold", "beige", "turquoise"));
 +
 +    public int bit() {
@@ -242,9 +247,9 @@ index 000000000..b16cf0bf7
 +                return BLACK;
 +            case "orange":
 +                return ORANGE;
-+            case "gray":
-+            case "grey":
-+                return GRAY;
++            case "purple":
++            case "violet":
++                return PURPLE;
 +            case "white":
 +                return WHITE;
 +            default:
@@ -390,7 +395,7 @@ new file mode 100644
 index 000000000..ab45bf3dc
 --- /dev/null
 +++ b/core/src/test/java/com/graphhopper/routing/util/parsers/OSMTrailColourParserTest.java
-@@ -0,0 +1,127 @@
+@@ -0,0 +1,129 @@
 +package com.graphhopper.routing.util.parsers;
 +
 +import com.graphhopper.reader.ReaderRelation;
@@ -477,15 +482,17 @@ index 000000000..ab45bf3dc
 +    }
 +
 +    @Test
-+    public void testGreyIsGray() {
-+        assertEquals(TrailColour.GRAY.bit(), hikingColoursOf(route("hiking", "colour", "grey")));
-+        assertEquals(TrailColour.GRAY.bit(), hikingColoursOf(route("hiking", "colour", "gray")));
++    public void testVioletIsPurple() {
++        assertEquals(TrailColour.PURPLE.bit(), hikingColoursOf(route("hiking", "colour", "violet")));
++        assertEquals(TrailColour.PURPLE.bit(), hikingColoursOf(route("hiking", "colour", "purple")));
 +    }
 +
 +    @Test
 +    public void testRareColoursAndHexBecomeOther() {
 +        assertEquals(TrailColour.OTHER.bit(), hikingColoursOf(route("hiking", "colour", "teal")));
 +        assertEquals(TrailColour.OTHER.bit(), hikingColoursOf(route("hiking", "colour", "brown")));
++        assertEquals(TrailColour.OTHER.bit(), hikingColoursOf(route("hiking", "colour", "grey")));
++        assertEquals(TrailColour.OTHER.bit(), hikingColoursOf(route("hiking", "colour", "gray")));
 +        assertEquals(TrailColour.OTHER.bit(), hikingColoursOf(route("hiking", "colour", "#C61D23")));
 +    }
 +

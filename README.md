@@ -439,7 +439,7 @@ The fourth is ours outright, with no upstream counterpart:
 `patches/0004-trail-colours.patch` adds the encoded values `hiking_colours` and
 `bike_colours`, so a route can be drawn in the colours of the waymarked trails
 it follows. Each is a 9-bit mask — red, blue, green, yellow, black, orange,
-gray, white, and `other` for the recognisable rest (brown, purple, teal, hex
+purple, white, and `other` for the recognisable rest (grey, brown, teal, hex
 values) — filled from the route relations an edge belongs to: `route=hiking`
 and `route=foot` for the first, `route=bicycle` and `route=mtb` for the second.
 The client asks for `details=hiking_colours` or `details=bike_colours`
@@ -451,6 +451,14 @@ The web app has to wait for the switchover before it starts asking. An unknown
 path detail is not ignored — `PathDetailsBuilderFactory` throws, failing the
 whole route request — so a frontend deployed ahead of the first coloured graph
 breaks routing rather than losing a colour.
+
+The eight named colours are the outdoor map renderer's own set (`COLORS` in
+`freemap-outdoor-map/src/render/layers/routes.rs`), and `other` is the grey it
+calls `none`, so a route the web app draws over these trails is coloured from
+the same names and matches the map under it. **Retuning either set means
+retuning both**, and a bit whose meaning changes needs a rebuilt jar and a
+reimport before the graph agrees with it — the mask in an existing graph still
+means what it did when it was built.
 
 Colour is read from the first field of `osmc:symbol` and falls back to `colour`,
 then to the rarer `color` spelling. Both tags are needed: across Europe 69 % of `route=hiking` relations carry
