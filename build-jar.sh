@@ -41,6 +41,15 @@ CHERRY_PICKS=(
 # than read from it, leaving the bump a deliberate edit in each place.
 JAR=graphhopper-web-11.0.jar
 
+# git cherry-pick and git am both write commits, and git refuses to write one
+# for somebody it cannot name. The service user this runs as has no identity and
+# has no business acquiring one, so the build brings its own: these commits live
+# only under build/, are thrown away by the next run's `git clean`, and are never
+# pushed anywhere. Only the committer is synthesised — the author comes from the
+# commit being picked, or from the patch's own From: line.
+export GIT_COMMITTER_NAME="graphhopper-configs-and-scripts"
+export GIT_COMMITTER_EMAIL="build@localhost"
+
 fail() {
   echo "$*"
   exit 1
@@ -95,7 +104,7 @@ git -C "$src" clean -qfdx
 for pick in "${CHERRY_PICKS[@]}"; do
   echo "Cherry-picking ${pick%%|*} — ${pick#*|}"
   git -C "$src" cherry-pick "${pick%%|*}" \
-    || fail "cherry-pick of ${pick%%|*} (${pick#*|}) failed — it no longer applies to ${BASE}"
+    || fail "cherry-pick of ${pick%%|*} (${pick#*|}) failed — read the git output above rather than assuming it is a conflict"
 done
 
 # Everything in patches/, in name order, rather than a list to keep in step
@@ -108,7 +117,7 @@ shopt -u nullglob
 for patch in "${patches[@]}"; do
   echo "Applying ${patch}"
   git -C "$src" am < "$patch" \
-    || fail "${patch} does not apply to ${BASE} with the cherry-picks above it"
+    || fail "git am of ${patch} failed — read the git output above rather than assuming it is a conflict"
 done
 
 mvn=(mvn -B -f "$src/pom.xml" -Dmaven.repo.local="$m2")

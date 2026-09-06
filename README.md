@@ -910,20 +910,31 @@ over whichever side systemd happens to name first.
 
 ### 6. Sudoers
 
+One file per service, since the two checkouts are deployed independently.
+`/etc/sudoers.d/graphopper`:
+
 ```
 freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
   /bin/systemctl enable --now graphhopper@a, /bin/systemctl enable --now graphhopper@b, \
   /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b, \
-  /bin/systemctl enable --now photon@a, /bin/systemctl enable --now photon@b, \
-  /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b, \
+  /bin/systemctl stop gh-update.timer, /bin/systemctl start gh-update.timer, \
   /bin/systemctl start --no-block gh-update.service, \
   /bin/systemctl stop gh-update.service
 ```
 
-The last two are `reimport.sh`'s, and are written with the exact arguments it
-uses because sudo matches the whole command line. They let the service user ask
-for an import and cancel one; they do not let it enable or disable the timer,
-which is what `run/halted` is for.
+and `/etc/sudoers.d/photon`:
+
+```
+freemap ALL=(root) NOPASSWD: /bin/systemctl enable --now photon@a, \
+  /bin/systemctl enable --now photon@b, /bin/systemctl disable --now photon@a, \
+  /bin/systemctl disable --now photon@b
+```
+
+The last two GraphHopper rules are `reimport.sh`'s, written with the exact
+arguments it uses because sudo matches the whole command line — `start
+gh-update.service` without `--no-block` is a different command and would be
+refused. Validate with `visudo -cf` on a copy before installing over the
+original: a sudoers file that does not parse takes every rule in it with it.
 
 ### 7. Install and enable units
 
