@@ -16,7 +16,9 @@ really flipped, retire the old one
 | `gh-update.sh`     | GraphHopper: OSM extract → import → switchover                          |
 | `photon-update.sh` | Photon: JSONL dump → import → switchover                                |
 | `freeze-config.sh` | Pins the config, models, jar and feeds to the graph being built         |
-| `deploy.sh`        | `git pull` that waits for the gap between imports                       |
+| `deploy.sh`        | `git pull` that waits for the gap between imports; `--jar` rebuilds too |
+| `build-jar.sh`     | Builds the patched GraphHopper jar and proves every patch landed        |
+| `reimport.sh`      | Spends an import on a config or jar change the mirror did not trigger   |
 | `notify.sh`        | Sends one Mailgun email (subject + body on stdin, or `--abrupt`)        |
 
 The repository is checked out **twice** on the server, at `/opt/graphhopper`
@@ -36,9 +38,12 @@ State kept between runs in `run/`, where `<x>` is `osm` or `photon`:
 | `<x>-mismatch.md5`    | Checksum that already failed verification once               |
 | `fail-streak`         | Consecutive recoverable failures                             |
 | `halted`              | Present = every run exits immediately until it is removed    |
+| `force`               | A re-import has been asked for; taken by the next run to start |
+| `forcing`             | That request, in progress; cleared only by an import that finished |
+| `aborting`            | An import is being killed on purpose — see `reimport.sh`      |
 | `gtfs/`               | Latest good copy of each GTFS feed, refreshed per import     |
 | `instance.{a,b}/`     | The config, custom models, jar and GTFS feeds that instance's graph was built from |
-| `update.lock`         | Held by a run, and by `deploy.sh` while it pulls              |
+| `update.lock`         | Held by a run, and by `deploy.sh` while it pulls and builds   |
 
 ## Photon
 
@@ -103,7 +108,8 @@ fires on `OnFailure=` but stays quiet whenever `$MONITOR_SERVICE_RESULT` is
 
 1. Timer triggers `gh-update.service` every hour.
 2. If `run/halted` exists, the run exits immediately.
-3. Script checks if new OSM data is available; exits silently if not.
+3. Script checks if new OSM data is available; exits silently if not — unless
+   `run/force` says to import anyway (see [Forcing an import](#forcing-an-import)).
 4. If yes, downloads the extract (resuming a partial one) and verifies its checksum.
 5. Freezes `config-freemap.<i>.yml` and `custom_models/` into `run/instance.<i>/`.
 6. Imports the data into the inactive instance (`a` or `b`), from that freeze.
@@ -184,6 +190,80 @@ mid-import can leave `gh-update.sh` executing the tail of a different file.
 a run, and by freezing what is running now before the templates move. Nothing
 reads the templates directly — an instance reads `run/instance.<i>/`, written
 when its graph was built, which is why the two can never disagree.
+
+### Deploying a jar change
+
+Push a change under `patches/`, then:
+
+```bash
+sudo -u freemap /opt/graphhopper/deploy.sh --jar
+```
+
+Same command, same lock, one extra step: after the pull it runs `build-jar.sh`
+and installs what that produced, still holding the lock. The build reads
+`patches/` out of the checkout, so pulling and building cannot be two commands —
+an import starting between them would freeze new custom models against a jar
+that has never heard of the encoded values they name.
+
+**Nothing in service moves.** A serving instance and a running import both read
+`run/instance.<i>/graphhopper.jar`, frozen when that graph was built; installing
+a template replaces only what the *next* import will freeze. The lock is not
+there to protect them, it is there to protect the freeze itself, which copies
+config, models and jar as one set — a template swap landing in the middle of
+that would pair half of one generation with half of another.
+
+The build takes minutes and the lock is held throughout. An hourly run arriving
+meanwhile waits for it; if it waits past its patience it retires as a
+recoverable failure and tries again next hour, which costs an hour of staleness
+and nothing else.
+
+`build-jar.sh` can also be run on its own, any time, including while an import
+is running. It writes only under `build/`, installs nothing, and nothing reads a
+jar from there — so it is the way to find out whether a patch still applies and
+still passes its tests before committing to a deploy.
+
+### Forcing an import
+
+Neither a config change nor a jar change reaches a graph without an import, and
+the hourly run imports only when Geofabrik's checksum has moved. To spend one
+deliberately:
+
+```bash
+sudo -u freemap /opt/graphhopper/reimport.sh              # after the current run
+sudo -u freemap /opt/graphhopper/reimport.sh --restart    # kill the current one first
+```
+
+`reimport.sh` writes `run/force` and starts `gh-update.service`, so the forced
+run happens inside the unit — same journal, same `Nice=`, same `OnFailure=` — as
+any other.
+
+A run takes the request by renaming `run/force` to `run/forcing`, and only
+`run/forcing` is cleared, only by an import that finished. Two files because
+both of these have to hold: a request made *while* an import is already running
+belongs to the next one, since this one is building a graph from what was there
+before — so it must not be cleared by the run that did not honour it; and a
+request must outlive a run that failed, so a mirror hiccup means the next hourly
+run still does the import that was asked for.
+
+`--restart` is for the case where the deploy landed while an import was already
+running, and that import is therefore building a graph from what was there
+before. It stops the service, which kills the import with it, and retires any
+instance the killed run had already started — an import cut short after its
+instance came up but before nginx moved leaves that instance serving a half-built
+graph, and the next run rightly refuses to clear a graph something is serving
+from. The live side, the one the nginx symlink names, is never touched.
+
+A deliberate stop is normally recorded by systemd as a success, so
+`gh-update-abort.service` does not fire. `reimport.sh` writes `run/aborting`
+anyway, and `notify.sh --abrupt` treats it as permission not to halt — because
+being wrong about that would stop the schedule the operator is in the middle of
+restarting, and nobody would notice until the next day's data failed to appear.
+The marker ages out after ten minutes, so one left behind cannot go on excusing
+real deaths.
+
+Either form re-downloads the extract: the last successful run deleted it and the
+import has to read something. Budget for the whole run, some fifteen hours, not
+for the minutes the change took to write.
 
 ### Migrating an install that predates the freeze
 
@@ -585,79 +665,67 @@ has the `AbstractSRTMElevationProvider` constructor #3183 builds on, and the PR
 only adds two self-contained classes plus four lines of dispatch in
 `GraphHopper.java`, while #3235 is a single condition in `OSMReader`.
 
-```bash
-git clone https://github.com/graphhopper/graphhopper.git
-cd graphhopper
-git checkout -b 11.0-sonny-ferry-slope 11.0
-git cherry-pick 25903cd0c6cfd23e1e72da71900b26dc2cfc362f    # #3183 sonny provider
-git cherry-pick 75fb59df438bf6e536da51f4e453ad978149f355    # #3235 skip ferries
-git am < /opt/graphhopper/patches/0003-max-slope-short-segments.patch
-git am < /opt/graphhopper/patches/0004-trail-colours.patch
-git am < /opt/graphhopper/patches/0005-pt-blocked-route-types.patch
-mvn -DskipTests -pl web -am package
-```
-
-Both patches carry tests, so it is worth running those classes rather than
-trusting the build. `-DfailIfNoTests=false` is required, not optional: `-am`
-also runs the `test` phase in `web-api`, where the filter matches nothing and
-Surefire would otherwise abort the reactor.
+`build-jar.sh` is that recipe, executable:
 
 ```bash
-mvn -pl core -am test -Dtest=SlopeCalculatorTest,OSMTrailColourParserTest -DfailIfNoTests=false
-mvn -pl web  -am test -Dtest=PtRouteResourceTest -DfailIfNoTests=false
+sudo -u freemap /opt/graphhopper/build-jar.sh
 ```
 
-Then diff the two pedestrian models we carry copies of, since nothing else will
-tell you they moved:
+It clones or fetches upstream into `build/`, resets a detached tree to the 11.0
+tag, applies the two cherry-picks and then every `patches/*.patch` in name
+order, and builds `web` with `-am`. Rebuilt from the tag on every run rather
+than updated in place: a run that died half way through a `git am` leaves a tree
+that looks finished and is not, and the checks below would be the only thing
+standing between that and a graph built by the wrong jar.
 
-```bash
-for f in foot hike; do
-  diff <(sed -n '/^{/,$p' core/src/main/resources/com/graphhopper/custom_models/$f.json) \
-       <(sed -n '/^{/,$p' /opt/graphhopper/custom_models/fm_$f.json)
-done
-```
+The patches are taken from the directory rather than listed, so adding `0006` is
+a commit and nothing else. The cherry-picks *are* listed, in `CHERRY_PICKS` at
+the top of the script, because each is one specific unreleased upstream commit
+that leaves the list the moment a release carries it.
 
-Silence means upstream has not touched them. Output means deciding what to take —
-see [Pedestrian Routing](#pedestrian-routing).
+It then runs the tests both patched classes carry rather than trusting the
+build. `-DfailIfNoTests=false` is required, not optional: `-am` also runs the
+`test` phase in `web-api`, where the filter matches nothing and Surefire would
+otherwise abort the reactor.
 
-Check all four landed. A jar silently missing one is the expensive failure: the
-import does not complain, it just aborts on `sonny`, quietly fattens every ferry
-line, writes the `max_slope` sentinel that took a working stroller profile down
-to "Connection between locations not found", or — for the colours — refuses to
+Then it proves all four landed **in the artifact** — `SonnyProvider` present,
+the `isFerry` condition on `OSMReader`'s sampling path, two `maxSlopeEnc`
+references on `SlopeCalculator`'s short-edge return, two `TrailColour` classes.
+A jar silently missing one is the expensive failure: the import does not
+complain, it just aborts on `sonny`, quietly fattens every ferry line, writes
+the `max_slope` sentinel that took a working stroller profile down to
+"Connection between locations not found", or — for the colours — refuses to
 start at all, since `graph.encoded_values` names two encoded values a stock jar
 has never heard of.
 
-```bash
-J=web/target/graphhopper-web-11.0-SNAPSHOT.jar
-unzip -l "$J" | grep SonnyProvider
-unzip -p "$J" com/graphhopper/reader/osm/OSMReader.class > /tmp/OSMReader.class
-javap -p -c /tmp/OSMReader.class \
-  | awk '/getLongEdgeSamplingDistance/{f=1} f{print} /EdgeSampling.sample/{if(f)exit}' \
-  | grep isFerry     # must print a line; empty means #3235 is missing
+Last, it diffs the two pedestrian models we carry copies of against upstream's,
+because nothing else will ever tell you they moved. That one only warns: output
+means deciding what to take, see [Pedestrian Routing](#pedestrian-routing).
 
-unzip -p "$J" com/graphhopper/routing/util/SlopeCalculator.class > /tmp/SC.class
-javap -p -c /tmp/SC.class \
-  | awk '/double 8.0d/{f=1} f&&/return/{exit} f' \
-  | grep -c maxSlopeEnc   # must print 2; 0 means the max_slope patch is missing
+The build tree and maven's repository both live under `build/` — a symlink to a
+volume with room, exactly as `graph-cache.{a,b}` are, and asserted the same way.
+The disk the checkout sits on is the one that fills.
 
-unzip -l "$J" | grep -c TrailColour   # must print 2; 0 means the colours patch is missing
-```
+Nothing is installed. `build-jar.sh` writes only under `build/`, so it is safe
+to run at any moment, including during an import, and it is the way to find out
+whether a patch still applies before committing to a deploy. Installing what it
+built is `deploy.sh --jar`, which does both under one lock — see
+[Deploying a jar change](#deploying-a-jar-change).
 
-The tag's pom says `11.0-SNAPSHOT`, so the artifact has to be renamed to
-`graphhopper-web-11.0.jar` — the one place that name is written down is the
-`jar=` line in `freeze-config.sh`, which is what a version bump edits. Neither
-`graphhopper@.service` nor `gh-update.sh` names a version any more: both run the
+The tag's pom says `11.0-SNAPSHOT`, so the artifact is staged under the name it
+is installed as, `graphhopper-web-11.0.jar`. That name is written down in two
+places — `JAR` in `build-jar.sh` and the `jar=` line in `freeze-config.sh` —
+and the script refuses to build if they disagree, so a version bump stays a
+deliberate edit in both rather than a silent mismatch in one. Neither
+`graphhopper@.service` nor `gh-update.sh` names a version at all: both run the
 frozen copy, which is always `run/instance.<i>/graphhopper.jar`.
 
-Install it by **rename, not in place**: a running instance holds the jar open,
-and truncating it under the JVM breaks lazy class loading.
+It is installed by **rename, not in place**: a running instance holds its jar
+open, and truncating one under a JVM breaks lazy class loading. `deploy.sh --jar`
+stages inside the checkout and renames, rather than moving straight out of
+`build/`, which is on another filesystem where the rename would not be atomic.
 
-```bash
-sudo install -o freemap -g freemap -m 644 new.jar /opt/graphhopper/.gh-new.jar
-sudo mv -f /opt/graphhopper/.gh-new.jar /opt/graphhopper/graphhopper-web-11.0.jar
-```
-
-That installs the **template**. Nothing runs it: like the config and the models,
+What lands is the **template**. Nothing runs it: like the config and the models,
 the jar is frozen per instance at `run/instance.<i>/`, and both the import and
 `graphhopper@<i>` read the freeze. So a jar installed now takes effect at the
 next **import**, for the data and for the serving of that graph alike — and a
@@ -671,9 +739,10 @@ while a jar that has lost an encoded value the frozen config names refuses to
 start at all. Freezing it makes "which jar built this graph" a fact on disk
 rather than whatever was last installed.
 
-To put a new jar in front of traffic sooner than the next timer run, import:
-there is no supported way to swap the jar under a serving graph, because there is
-no way to know it still means the same thing.
+To put a new jar in front of traffic sooner than the next timer run, import —
+`reimport.sh`, see [Forcing an import](#forcing-an-import). There is no supported
+way to swap the jar under a serving graph, because there is no way to know it
+still means the same thing.
 
 **Migrating a freeze written before the jar was part of one** — a one-off, and
 only for instances whose freeze predates this.
@@ -758,9 +827,21 @@ chmod 600 gh-update.conf
 
 ### 2. GraphHopper jar
 
-Build it — the official release has no `sonny` provider. See
-[Building the jar](#building-the-jar). The result belongs in this directory as
-`graphhopper-web-11.0.jar` (gitignored).
+Build it — the official release has no `sonny` provider. `build-jar.sh` needs
+maven and a JDK, and a `build/` symlink to a volume with a few GB free for the
+upstream clone and maven's repository:
+
+```bash
+apt install maven
+ln -s /fm/data4/graphhopper-data/build build   # freemap owns that parent; /fm/data4 does not
+sudo -u freemap ./deploy.sh --jar
+```
+
+`deploy.sh --jar` builds and installs in one step. On a checkout with no jar yet
+there is nothing to protect, so plain `./build-jar.sh` followed by moving the
+artifact into place works too. See [Building the jar](#building-the-jar) for what
+the build does and why the release alone is not enough. The result belongs in
+this directory as `graphhopper-web-11.0.jar` (gitignored).
 
 ### 3. Elevation tiles
 
@@ -810,8 +891,15 @@ freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
   /bin/systemctl enable --now graphhopper@a, /bin/systemctl enable --now graphhopper@b, \
   /bin/systemctl disable --now graphhopper@a, /bin/systemctl disable --now graphhopper@b, \
   /bin/systemctl enable --now photon@a, /bin/systemctl enable --now photon@b, \
-  /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b
+  /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b, \
+  /bin/systemctl start --no-block gh-update.service, \
+  /bin/systemctl stop gh-update.service
 ```
+
+The last two are `reimport.sh`'s, and are written with the exact arguments it
+uses because sudo matches the whole command line. They let the service user ask
+for an import and cancel one; they do not let it enable or disable the timer,
+which is what `run/halted` is for.
 
 ### 7. Install and enable units
 

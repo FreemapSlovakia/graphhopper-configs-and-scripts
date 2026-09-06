@@ -16,6 +16,40 @@ set -a
 source ./gh-update.conf
 set +a
 
+# An import Geofabrik did not ask for. The hourly run only imports when the
+# extract's checksum has moved, so a new config, a new custom model or a new jar
+# would otherwise sit in the checkout until the mirror happens to publish — and
+# none of the three reaches a graph without an import.
+#
+# reimport.sh writes the file rather than passing the flag, so a forced run
+# still happens inside gh-update.service, with its journal, its Nice= and its
+# OnFailure=. --force is for driving this script by hand.
+#
+# Taken by rename, into run/forcing, and only that is cleared at the end. Two
+# files rather than one because both of these have to hold:
+#
+#   a request made *during* a run must survive it — reimport.sh can be run while
+#   an import is already going, and that import is building a graph from what
+#   was there before, so the request belongs to the next one. Clearing run/force
+#   at the end of this run would silently swallow it;
+#
+#   a request must survive a run that failed. A mirror hiccup means the import
+#   that was asked for did not happen, so run/forcing stays and the next hourly
+#   run picks it up rather than quietly going back to sleep.
+force=0
+case "${1:-}" in
+  --force) force=1 ;;
+  "") ;;
+  *) echo "usage: ${0##*/} [--force]" >&2; exit 2 ;;
+esac
+if [ -f run/force ]; then
+  force=1
+  mv -f run/force run/forcing
+fi
+if [ -f run/forcing ]; then
+  force=1
+fi
+
 # Against deploy.sh — see take_update_lock in common.sh. Here rather than in
 # common.sh's own body because it may need to mail, and the addresses only exist
 # once the config above has been sourced.
@@ -185,10 +219,17 @@ pbf_file="run/$(basename "$GEOFABRIK_URL")"
 fetch_md5 "${GEOFABRIK_URL}.md5"
 
 # run/osm.md5 holds the full remote line; compare only the hash.
+trigger="new extract"
 if [ "$(stored_md5 run/osm.md5)" = "$remote_md5" ]; then
-  echo "No update available"
-  clear_failure_streak
-  exit 0
+  if [ "$force" = 0 ]; then
+    echo "No update available"
+    clear_failure_streak
+    exit 0
+  fi
+  # The extract is downloaded again below regardless: the last successful run
+  # deleted it, and the import has to read something.
+  trigger="forced re-import, no new extract"
+  echo "No new extract on the mirror, but a re-import was asked for"
 fi
 
 # Where traffic actually goes rather than which units are enabled — see the
@@ -306,7 +347,7 @@ echo "$md5_line" > run/osm.md5
 
 sudo -n /bin/systemctl disable --now graphhopper@${active} || true
 
-rm -f "$pbf_file" run/osm-downloaded.md5 run/extract.pbf
+rm -f "$pbf_file" run/osm-downloaded.md5 run/extract.pbf run/forcing
 clear_failure_streak
 reported=1
 notify "${SERVICE} update succeeded on ${host}" <<EOF
@@ -314,5 +355,6 @@ GraphHopper OSM data was updated successfully on ${host} at $(date).
 
   instance: ${active} -> ${next}
   data:     ${md5_line}
+  trigger:  ${trigger}
 EOF
 echo "Success"

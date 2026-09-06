@@ -25,6 +25,21 @@ set -euo pipefail
 main() {
   cd "$(dirname "$0")"
 
+  # --jar also rebuilds and installs the GraphHopper jar, inside the same lock
+  # hold as the pull. Not a separate script, because the build reads patches/
+  # out of the checkout: pulling and building have to be one indivisible step,
+  # or an import starting in between would freeze new models against a jar that
+  # has never seen them.
+  local with_jar=0
+  if [ "${1:-}" = "--jar" ]; then
+    with_jar=1
+    shift
+  fi
+  if [ "$#" -gt 0 ]; then
+    echo "usage: ${0##*/} [--jar]" >&2
+    exit 2
+  fi
+
   # No sudo anywhere below — but everything here writes into the checkout, and
   # the updater has to be able to replace it later as the service user. Run as
   # anyone else and it leaves a freeze that user cannot overwrite; run as root
@@ -47,6 +62,14 @@ main() {
   else
     echo "Neither gh-update.conf nor photon-update.conf is here — is this a service checkout?" >&2
     exit 1
+  fi
+
+  # Before the lock, not after: waiting hours for an import to end and only then
+  # being told the flag is not for this checkout is not a message worth waiting
+  # for.
+  if [ "$with_jar" = 1 ] && [ "$service" != graphhopper ]; then
+    echo "--jar builds the GraphHopper jar, and this is the ${service} checkout" >&2
+    exit 2
   fi
 
   mkdir -p run
@@ -98,6 +121,35 @@ main() {
   fi
 
   git pull --ff-only
+
+  # The jar is a template exactly like the config and the models, and it moves
+  # in the same breath as the pull that brought the patches it is built from,
+  # under the lock that pull already holds.
+  #
+  # Nothing in service moves. A serving instance and a running import both read
+  # run/instance.<i>/graphhopper.jar, frozen when that graph was built; this
+  # replaces only what the *next* import will freeze. What the lock is for is
+  # the freeze itself, which copies the config, the models and the jar as one
+  # set — a template swap landing in the middle of it would pair half of one
+  # generation with half of another.
+  #
+  # The build takes minutes and the lock is held throughout. An hourly run
+  # arriving meanwhile waits; if it waits past its patience it retires as a
+  # recoverable failure and tries again next hour, which costs nothing but an
+  # hour of staleness.
+  if [ "$with_jar" = 1 ]; then
+    local artifact jar_name
+    artifact="$(./build-jar.sh)"
+    jar_name="$(basename "$artifact")"
+
+    # By rename, never in place: the next freeze may already be reading this
+    # path, and a running JVM that still has the old inode open keeps it. Staged
+    # inside the checkout rather than moved straight from build/, which is on
+    # another filesystem, where the rename would not be atomic.
+    cp "$artifact" ".${jar_name}.new"
+    mv -f ".${jar_name}.new" "$jar_name"
+    echo "Installed ${jar_name} — the next import will freeze it."
+  fi
 
   # Said definitively rather than left as "if it changed": an instance still on
   # the old ExecStart reads the templates, and once the next import moves those

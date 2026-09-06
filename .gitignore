@@ -1,6 +1,7 @@
 gh-update.conf
 run
 graphhopper-web-11.0.jar
+build
 graphhopper-upstream.conf
 srtmprovider
 sonny-dem
@@ -15,5 +16,6 @@ photon-data.b
 nginx-photon.conf
 photon.service
 photon.freemap.sk.hardened
-# swap_symlink's staging name, left behind only if a run dies mid-swap
+# Staging names, left behind only if a run dies mid-swap
 *.conf.new
+.graphhopper-web-*.jar.new

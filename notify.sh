@@ -33,6 +33,20 @@ case "${1:-}" in
       exit 0
     fi
 
+    # reimport.sh --restart kills a running import on purpose. systemd normally
+    # records a requested stop as a success and this unit is never reached, so
+    # the marker is belt and braces — but the thing it prevents is halting the
+    # schedule the operator is in the middle of restarting, which would not be
+    # noticed until the next day's data failed to appear.
+    #
+    # Aged out rather than merely deleted: a marker left behind by a crash
+    # between writing it and the stop must not go on excusing real deaths.
+    if [ -n "$(find run/aborting -mmin -10 2>/dev/null)" ]; then
+      rm -f run/aborting
+      echo "${unit} was stopped deliberately; not halting"
+      exit 0
+    fi
+
     # It never reached its own halt(), and an import killed once will likely be
     # killed again, so stop the schedule from here.
     { echo "Halted $(date -Is)"
