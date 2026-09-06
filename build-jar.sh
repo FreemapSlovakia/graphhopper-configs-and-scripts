@@ -168,6 +168,15 @@ found="$(grep -c TrailColour <<<"$listing" || true)"
 [ "$found" = 2 ] \
   || fail "patches/0004 (trail colours) is not in the jar: expected 2 TrailColour classes, found ${found}"
 
+# javap -v, not -c: 0005's only trace in the bytecode is the @QueryParam
+# annotation's value, which lives in the constant pool and the RuntimeVisible-
+# Annotations attribute. -c prints neither, and would report this missing from
+# a jar that has it.
+unzip -p "$built" com/graphhopper/resources/PtRouteResource.class > "$tmp/PtRouteResource.class" \
+  || fail "the jar has no com/graphhopper/resources/PtRouteResource.class — has upstream moved it?"
+grep -q 'pt\.blocked_route_types' <<<"$(javap -v -p "$tmp/PtRouteResource.class")" \
+  || fail "patches/0005 (pt.blocked_route_types) is not in the jar"
+
 # Not a failure, and not something anything else will ever mention. We carry
 # copies of two upstream pedestrian models; when upstream edits its own, the
 # copies stop being a deliberate divergence and start being a stale one.

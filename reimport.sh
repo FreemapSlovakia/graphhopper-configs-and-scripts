@@ -49,13 +49,30 @@ if [ -f run/halted ]; then
 fi
 
 if [ "$restart" = 1 ]; then
-  # A marker, not a bet on systemd's bookkeeping. A requested stop is normally
-  # recorded as success, so OnFailure= never fires and this file is never read
-  # — but if that assumption is wrong, gh-update-abort.service writes run/halted
-  # and the deliberate restart would stop tomorrow's update too. notify.sh
-  # --abrupt consumes it, and ages it out, so one left behind cannot go on
-  # excusing real deaths.
-  : > run/aborting
+  # Name the run about to be killed, so that run — and only that run — can tell
+  # its own death from a real one. `systemctl stop` SIGTERMs the whole cgroup,
+  # so the import dies first and gh-update.sh's `|| hard_fail` runs, or its EXIT
+  # trap does; either way it would write run/halted and mail a failure, and the
+  # run started at the bottom of this script would then read run/halted and do
+  # nothing at all. common.sh and notify.sh both check this marker.
+  #
+  # Written before the stop, because afterwards there is no invocation left to
+  # ask about. Nothing running means nothing to excuse, and nothing to write —
+  # and InvocationID outlives the run it names, so asking without checking the
+  # state first would write a marker for a run that ended hours ago.
+  #
+  # Not `is-active`: gh-update.service is Type=oneshot with no RemainAfterExit,
+  # so while its ExecStart runs the unit sits in `activating`, which is-active
+  # reports as false. Same trap the migration block in README.md warns about.
+  case "$(systemctl show -p ActiveState --value gh-update.service 2>/dev/null || true)" in
+    inactive | failed | "") ;;
+    *)
+      invocation="$(systemctl show -p InvocationID --value gh-update.service 2>/dev/null || true)"
+      if [ -n "$invocation" ]; then
+        echo "$invocation" > run/aborting
+      fi
+      ;;
+  esac
 
   echo "Stopping any running import"
   sudo -n /bin/systemctl stop gh-update.service
@@ -99,7 +116,10 @@ fi
 echo "Starting gh-update.service"
 sudo -n /bin/systemctl start --no-block gh-update.service
 
-rm -f run/aborting
+# run/aborting is deliberately left where it is. Removing it here would race the
+# OnFailure= job that may still be about to read it, and it can excuse nothing
+# but the invocation it names in any case; the next update run sweeps it once it
+# is old enough that nothing can still want it.
 
 echo
 echo "Forced import queued. It re-downloads the extract, so expect the full run:"

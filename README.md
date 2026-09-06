@@ -40,7 +40,7 @@ State kept between runs in `run/`, where `<x>` is `osm` or `photon`:
 | `halted`              | Present = every run exits immediately until it is removed    |
 | `force`               | A re-import has been asked for; taken by the next run to start |
 | `forcing`             | That request, in progress; cleared only by an import that finished |
-| `aborting`            | An import is being killed on purpose — see `reimport.sh`      |
+| `aborting`            | Invocation ID of a run being killed on purpose — `reimport.sh` |
 | `gtfs/`               | Latest good copy of each GTFS feed, refreshed per import     |
 | `instance.{a,b}/`     | The config, custom models, jar and GTFS feeds that instance's graph was built from |
 | `update.lock`         | Held by a run, and by `deploy.sh` while it pulls and builds   |
@@ -146,7 +146,9 @@ So two things guard the flip now, from opposite ends:
   box's nginx answering) and requires the `X-GH-Instance` header to name the new
   side. A status-only check would not do: the failure being caught answers 200
   until the old instance is stopped. On failure the symlink goes back, nginx is
-  reloaded again, and the run halts with the old instance still serving.
+  reloaded again, the new side is retired — left enabled it would be the one the
+  next run tried to import into, and that run would refuse, hourly, to clear a
+  graph something is running on — and the run halts with the old side serving.
 
 Neither subsumes the other. A fragment overwritten wholesale fails the first
 check; one whose port was corrected but whose header was not fails the second.
@@ -253,13 +255,22 @@ instance came up but before nginx moved leaves that instance serving a half-buil
 graph, and the next run rightly refuses to clear a graph something is serving
 from. The live side, the one the nginx symlink names, is never touched.
 
-A deliberate stop is normally recorded by systemd as a success, so
-`gh-update-abort.service` does not fire. `reimport.sh` writes `run/aborting`
-anyway, and `notify.sh --abrupt` treats it as permission not to halt — because
-being wrong about that would stop the schedule the operator is in the middle of
-restarting, and nobody would notice until the next day's data failed to appear.
-The marker ages out after ten minutes, so one left behind cannot go on excusing
-real deaths.
+Killing a run has to be told apart from a run that died. `systemctl stop`
+SIGTERMs the whole cgroup, so the import goes first and `gh-update.sh` reaches
+its own `|| hard_fail`, or its `EXIT` trap — either of which writes `run/halted`
+and mails a failure. The run `reimport.sh` starts a moment later would then read
+`run/halted` and do nothing at all: a spurious FAILED mail, a stopped schedule,
+and the forced import silently not happening, all discovered the next day.
+
+So `reimport.sh` writes the systemd **invocation ID** of the run it is about to
+kill into `run/aborting`, and `common.sh` and `notify.sh` both compare it
+against their own before halting or mailing. By invocation rather than by
+timestamp, because a marker that only said "an abort happened recently" would
+also cover the fresh run started seconds later — swallowing, in silence, a
+genuine failure in the first minutes of exactly the import being waited on.
+Nothing removes the marker at the time: whoever wrote it would race the
+`OnFailure=` job that may still want to read it, so the next update run sweeps
+it once it is too old for anything to want.
 
 Either form re-downloads the extract: the last successful run deleted it and the
 import has to read something. Budget for the whole run, some fifteen hours, not
@@ -688,9 +699,13 @@ build. `-DfailIfNoTests=false` is required, not optional: `-am` also runs the
 `test` phase in `web-api`, where the filter matches nothing and Surefire would
 otherwise abort the reactor.
 
-Then it proves all four landed **in the artifact** — `SonnyProvider` present,
+Then it proves all five landed **in the artifact** — `SonnyProvider` present,
 the `isFerry` condition on `OSMReader`'s sampling path, two `maxSlopeEnc`
-references on `SlopeCalculator`'s short-edge return, two `TrailColour` classes.
+references on `SlopeCalculator`'s short-edge return, two `TrailColour` classes,
+and `pt.blocked_route_types` in `PtRouteResource`'s constant pool. That last one
+needs `javap -v`, not `-c`: 0005's only trace in the bytecode is a `@QueryParam`
+annotation value, which `-c` does not print — a check written with `-c` would
+report it missing from a jar that has it.
 A jar silently missing one is the expensive failure: the import does not
 complain, it just aborts on `sonny`, quietly fattens every ferry line, writes
 the `max_slope` sentinel that took a working stroller profile down to
@@ -839,7 +854,8 @@ sudo -u freemap ./deploy.sh --jar
 
 `deploy.sh --jar` builds and installs in one step. On a checkout with no jar yet
 there is nothing to protect, so plain `./build-jar.sh` followed by moving the
-artifact into place works too. See [Building the jar](#building-the-jar) for what
+artifact into place works too. This first one is the slow build: it clones
+upstream and fills an empty maven repository before compiling anything. See [Building the jar](#building-the-jar) for what
 the build does and why the release alone is not enough. The result belongs in
 this directory as `graphhopper-web-11.0.jar` (gitignored).
 

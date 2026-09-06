@@ -33,16 +33,20 @@ case "${1:-}" in
       exit 0
     fi
 
-    # reimport.sh --restart kills a running import on purpose. systemd normally
-    # records a requested stop as a success and this unit is never reached, so
-    # the marker is belt and braces — but the thing it prevents is halting the
-    # schedule the operator is in the middle of restarting, which would not be
-    # noticed until the next day's data failed to appear.
+    # reimport.sh --restart kills a running import on purpose, so that the next
+    # one reads what was just deployed. The script normally notices that for
+    # itself and exits with a status, which the check above already covers; this
+    # is the remaining case, where bash took the SIGTERM without getting to run
+    # its own EXIT trap. Halting here would stop the schedule the operator is in
+    # the middle of restarting, and nobody would notice until the next day's
+    # data failed to appear.
     #
-    # Aged out rather than merely deleted: a marker left behind by a crash
-    # between writing it and the stop must not go on excusing real deaths.
-    if [ -n "$(find run/aborting -mmin -10 2>/dev/null)" ]; then
-      rm -f run/aborting
+    # Matched by invocation rather than by age, so it can only excuse the one
+    # run it was written for — never the fresh run started seconds later. The
+    # marker is not removed here: the next update run sweeps it once it is old
+    # enough that nothing can still want it.
+    if [ -n "${MONITOR_INVOCATION_ID:-}" ] \
+      && [ "$(cat run/aborting 2>/dev/null || true)" = "$MONITOR_INVOCATION_ID" ]; then
       echo "${unit} was stopped deliberately; not halting"
       exit 0
     fi

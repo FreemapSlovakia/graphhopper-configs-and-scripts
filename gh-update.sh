@@ -331,10 +331,19 @@ if ! verify_through_nginx "$next"; then
   if [ "$active" = a ] || [ "$active" = b ]; then
     if swap_symlink "./graphhopper-upstream.${active}.conf" ./graphhopper-upstream.conf \
        && sudo -n /bin/systemctl reload nginx; then
-      rolled_back=" Traffic was rolled back to instance ${active}, which is still up."
+      # And retire ${next}, which is now serving nobody. Left enabled it would
+      # be the side the next run picks to import into, and that run would die on
+      # assert_instance_idle — every hour, until someone disabled it by hand.
+      # The same tidying wait_for_gh_ready's failure path already does.
+      sudo -n /bin/systemctl disable --now "graphhopper@${next}" || true
+      rolled_back=" Traffic is back on instance ${active}, and ${next} has been retired."
     else
+      # ${next} stays up on purpose here: the symlink still points at it, so it
+      # is the only thing serving anything at all.
       rolled_back=" Rolling back to instance ${active} failed too, so routing is down."
     fi
+  else
+    rolled_back=" Nothing was serving before this run, so there is nowhere to roll traffic back to — nginx is not serving ${next} either, and routing is down."
   fi
   hard_fail "nginx did not answer as instance ${next} after the switchover, even though ${next} is healthy on localhost:${next_port} — check graphhopper-upstream.${next}.conf and the vhost.${rolled_back}"
 fi

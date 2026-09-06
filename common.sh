@@ -29,6 +29,12 @@ readonly WGET_RETRY_OPTS=(
 
 mkdir -p run
 
+# The marker names a run that is long dead by the time one is this old, and the
+# OnFailure= job that might have wanted to read it has long since run. Swept
+# here — never by whoever wrote it, which would race that job — so run/ does not
+# carry a permanent "an import is being killed on purpose".
+find run/aborting -mmin +10 -delete 2>/dev/null || true
+
 echo "---BEGIN---"
 
 host="$(hostname)"
@@ -46,10 +52,40 @@ notify() { # subject in $1, body on stdin
     || echo "WARNING: could not send notification: $1" >&2
 }
 
+# This run is being killed on purpose, by reimport.sh --restart, so that the
+# next one imports what was just deployed. Everything below reports a death
+# nobody asked for; this one was asked for, and reporting it would both mail a
+# failure and halt the schedule the operator is in the middle of restarting —
+# discovered the next day, when the data has not moved.
+#
+# It is not enough for notify.sh to know this. `systemctl stop` SIGTERMs the
+# whole cgroup, so the import dies first and this script's own `|| hard_fail`
+# runs, or its EXIT trap does; both halt long before OnFailure= is reached, and
+# the run that reimport.sh then starts would read run/halted and do nothing.
+#
+# The marker holds the systemd invocation ID of the run being killed, and this
+# compares it against our own, so it can only ever excuse that one run. Naming
+# the run matters more than it looks: reimport.sh --restart starts a fresh run
+# seconds later, and a marker that merely said "an abort happened recently"
+# would cover that run too — swallowing, in silence, a genuine failure in the
+# first minutes of exactly the import the operator was waiting on.
+#
+# Empty INVOCATION_ID means this is not running under systemd at all, and a
+# hand-run script is nobody's deliberate abort. Photon has no equivalent of
+# reimport.sh, so this is never true there.
+deliberate_abort() {
+  [ -n "${INVOCATION_ID:-}" ] \
+    && [ "$(cat run/aborting 2>/dev/null || true)" = "$INVOCATION_ID" ]
+}
+
 # Stop the schedule until a human has looked. A marker file rather than
 # stopping the timer: it needs no privileges and, unlike a stopped timer unit,
 # it survives a reboot.
 halt() {
+  if deliberate_abort; then
+    echo "Stopped deliberately — leaving the schedule alone"
+    return 0
+  fi
   { echo "Halted $(date -Is)"
     echo "Reason: $*"
     echo "To resume: rm $(pwd)/run/halted"
@@ -59,6 +95,13 @@ halt() {
 # Unrecoverable: halt the schedule and say so.
 hard_fail() {
   echo "$*" >&2
+  # The usual way a deliberately killed run arrives here: the import took the
+  # SIGTERM first, so this reads as an import that failed.
+  if deliberate_abort; then
+    echo "...but this run was stopped on purpose, so it is not a failure"
+    reported=1
+    exit 1
+  fi
   halt "$*"
   notify "${SERVICE} update FAILED on ${host}" <<EOF
 The ${SERVICE} update has FAILED on ${host} at $(date).
@@ -113,6 +156,13 @@ clear_failure_streak() {
 
 on_exit() {
   local rc=$?
+  # The other way a deliberately killed run arrives here: bash itself took the
+  # SIGTERM, with no message of its own to leave behind.
+  if [ "$rc" -ne 0 ] && [ "$reported" -eq 0 ] && deliberate_abort; then
+    echo "Stopped on purpose; not halting"
+    echo "---END---"
+    return
+  fi
   # A death that got past hard_fail/soft_fail — set -e tripping somewhere with
   # no message of its own. Report it rather than let it vanish.
   if [ "$rc" -ne 0 ] && [ "$reported" -eq 0 ]; then
@@ -228,10 +278,16 @@ swap_symlink() { # target, linkname
 # needs the MAILGUN_* that come from there. `exec 9>` inside a function still
 # affects the caller's fd table, so the lock spans the rest of the run.
 #
-# Waited on rather than skipped, and reported when the wait runs out. A deploy
-# holds this for a freeze and a fetch — seconds — so ten minutes means it is
-# stuck, and exiting 0 on a busy lock would let that quietly stall every run
-# from then on, with the data going stale and nothing ever saying so.
+# Waited on rather than skipped, and reported when the wait runs out. Exiting 0
+# on a busy lock would let a stuck deploy quietly stall every run from then on,
+# with the data going stale and nothing ever saying so.
+#
+# Half an hour rather than the ten minutes this used to allow, because what a
+# deploy holds it for has changed: `deploy.sh --jar` keeps it across a whole
+# `build-jar.sh`, and the first of those clones upstream and fills an empty
+# maven repository before it compiles anything. A run that waits half an hour
+# and then imports costs an hour of staleness at worst; one that gives up on a
+# perfectly healthy deploy costs a recoverable failure and the same hour.
 #
 # deploy.sh cannot source this file (doing so prints ---BEGIN---, installs the
 # EXIT trap and exits on run/halted), so it opens the same path on the same fd
@@ -245,8 +301,8 @@ swap_symlink() { # target, linkname
 # Closing it would mean taking the lock bare beforehand and upgrading to the
 # reporting form after, which is more machinery than the risk is worth.
 readonly UPDATE_LOCK=run/update.lock
-take_update_lock() { # optional seconds to wait, default 600
-  local wait_s="${1:-600}"
+take_update_lock() { # optional seconds to wait, default 1800
+  local wait_s="${1:-1800}"
   exec 9>"$UPDATE_LOCK"
   flock -w "$wait_s" 9 \
     || soft_fail "$UPDATE_LOCK still held after $((wait_s / 60)) minutes — a deploy is stuck, or something else is holding it"

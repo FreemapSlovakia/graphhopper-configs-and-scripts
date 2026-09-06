@@ -120,6 +120,12 @@ main() {
     fi
   fi
 
+  # Remembered across the pull so a failed build can put it back — see below.
+  local before=""
+  if [ "$with_jar" = 1 ]; then
+    before="$(git rev-parse HEAD)"
+  fi
+
   git pull --ff-only
 
   # The jar is a template exactly like the config and the models, and it moves
@@ -139,7 +145,20 @@ main() {
   # hour of staleness.
   if [ "$with_jar" = 1 ]; then
     local artifact jar_name
-    artifact="$(./build-jar.sh)"
+    if ! artifact="$(./build-jar.sh)"; then
+      # Undo the pull. "One indivisible step" above is only true if a failed
+      # build takes the templates back with it: a checkout left carrying new
+      # custom models and the old jar is precisely the pairing this flag exists
+      # to prevent, and the next import — within the hour, unattended — would
+      # freeze exactly that. Safe to reset because --ff-only has just succeeded,
+      # which it cannot do over a dirty tree, and this script is already fully
+      # parsed.
+      git reset --hard "$before"
+      echo >&2
+      echo "The build failed, so the pull was rolled back to ${before} — the checkout" >&2
+      echo "and the jar still match each other. Fix the build and run this again." >&2
+      exit 1
+    fi
     jar_name="$(basename "$artifact")"
 
     # By rename, never in place: the next freeze may already be reading this
