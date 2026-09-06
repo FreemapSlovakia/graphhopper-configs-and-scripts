@@ -5,8 +5,26 @@ index up to date, using systemd timers and services.
 
 Both follow the same shape — check a remote checksum, download and verify,
 import into the idle instance, health-check it, flip nginx, check that nginx
-really flipped, retire the old one
-— so the machinery is shared and only the service-specific steps differ.
+really flipped, retire the old one — so the machinery is shared and only the
+service-specific steps differ.
+
+## Everyday operations
+
+| Task | Command |
+| ---- | ------- |
+| Deploy a change to any script, config, model or unit | `sudo -u freemap /opt/graphhopper/deploy.sh` |
+| …one that also touches `patches/` | `sudo -u freemap /opt/graphhopper/deploy.sh --jar` |
+| Make a deployed change reach a graph | `sudo -u freemap /opt/graphhopper/reimport.sh` |
+| …replacing an import already in flight | `sudo -u freemap /opt/graphhopper/reimport.sh --restart` |
+| Check a patch still builds, installing nothing | `sudo -u freemap /opt/graphhopper/build-jar.sh` |
+| Resume after a hard failure | `sudo -u freemap rm /opt/graphhopper/run/halted` |
+| Watch a run | `journalctl -fu gh-update.service` |
+| See which instance is live | `curl -sI https://graphhopper.freemap.sk/ \| grep -i x-gh-instance` |
+
+None of these touches what is currently serving. A **recoverable** failure needs
+nothing at all — the next hourly run retries by itself; only a **hard** one
+leaves `run/halted` for a human. Details in [Deploying a change](#deploying-a-change),
+[Forcing an import](#forcing-an-import) and [After a failure](#after-a-failure).
 
 ## Scripts
 
@@ -128,13 +146,11 @@ and an `add_header`. The same shape as Photon, and for the same reason: the TLS
 config, the body limit and the log paths live in one place, so they cannot drift
 between the two sides, and there is exactly one line per side left to get wrong.
 
-It used to be two complete vhosts, `graphhopper.freemap.sk.{a,b}`, differing
-only in the port. On 2026-09-06 the `b` copy was overwritten by a copy of the
-`a` copy — by a tool that preserves mtimes, so the file still read as untouched
-since August — and the next switchover pointed every request at instance `a`
-moments before stopping it. Routing was down for an hour and three quarters.
-Nothing in the run noticed: the readiness poll asks `127.0.0.1:9989` directly,
-which was perfectly healthy, and the reload did exactly what the file said.
+It used to be two complete vhosts differing only in the port. On 2026-09-06 the
+`b` copy was overwritten by a copy of the `a` one, and the next switchover
+pointed every request at the instance it was about to stop: routing was down for
+an hour and three quarters, and nothing in the run noticed, because the readiness
+poll asks `127.0.0.1:9989` directly and that instance was perfectly healthy.
 
 So two things guard the flip now, from opposite ends:
 
@@ -155,9 +171,10 @@ check; one whose port was corrected but whose header was not fails the second.
 `X-GH-Instance` is also on every public response, so which side is live can be
 read with `curl -I` from anywhere.
 
-## Deploying a config change
+## Deploying a change
 
-Edit `config-freemap.{a,b}.yml` or `custom_models/` here, push, and on the
+Everything in this repository deploys the same way — a script, a systemd unit,
+`config-freemap.{a,b}.yml`, `custom_models/`, `limit.geojson`. Push, then on the
 server:
 
 ```bash
@@ -165,8 +182,17 @@ sudo -u freemap /opt/graphhopper/deploy.sh
 ```
 
 Any time — it waits for the gap between imports by itself and needs no
-watching. The change takes effect on the next import, one instance at a time,
-and the live instance is not touched.
+watching.
+
+When it takes effect depends on what moved. A script is in force the moment it
+lands. A systemd unit is not: `deploy.sh` refuses to finish quietly and prints
+the `install` line to run as root, because an instance left on the old
+`ExecStart` is the failure all of this exists to prevent. The config, the models
+and the jar are *templates* — an instance runs the copy frozen into
+`run/instance.<i>/` when its graph was built — so those reach users only at the
+next import, one instance at a time, and the live instance is not touched.
+[Forcing an import](#forcing-an-import) is how to stop that waiting for
+Geofabrik.
 
 It uses no sudo of its own, but it must run as the user that owns the checkout,
 because the updater has to be able to replace what it writes; it refuses to
@@ -255,30 +281,17 @@ instance came up but before nginx moved leaves that instance serving a half-buil
 graph, and the next run rightly refuses to clear a graph something is serving
 from. The live side, the one the nginx symlink names, is never touched.
 
-Killing a run has to be told apart from a run that died, and what a kill
-actually does here was measured rather than assumed. Stopping a run mid-import
-on 2026-09-06: `systemctl stop` SIGTERMed the whole cgroup, java died, bash went
-with it (`code=killed, status=15/TERM`), its `EXIT` trap printed `---END---` but
-saw `$? = 0` and reported nothing — and systemd recorded the unit `Failed with
-result 'signal'` and fired `OnFailure=`, so `gh-update-abort.service` wrote
-`run/halted` and mailed. One second later the timer's already-queued run started
-and did nothing at all, because `run/halted` was by then there.
+Killing a run has to be told apart from a run that died, or the kill halts the
+schedule it was meant to restart. Measured, not assumed: a `systemctl stop`
+mid-import leaves the unit `Failed with result 'signal'`, fires `OnFailure=`, and
+`gh-update-abort.service` writes `run/halted` — so the run started a second later
+reads that file and does nothing, and the import silently never happens.
 
-That is the whole failure in miniature: a spurious DIED mail, a stopped
-schedule, and the import that was asked for silently not happening. Killed
-somewhere other than the import, the same story arrives by the other door —
-whatever the script was waiting on fails under it and `|| hard_fail` or the
-`EXIT` trap halts first — so both ends have to know.
-
-So `reimport.sh` writes the systemd **invocation ID** of the run it is about to
-kill into `run/aborting`, and `common.sh` and `notify.sh` both compare it
-against their own before halting or mailing. By invocation rather than by
-timestamp, because a marker that only said "an abort happened recently" would
-also cover the fresh run started seconds later — swallowing, in silence, a
-genuine failure in the first minutes of exactly the import being waited on.
-Nothing removes the marker at the time: whoever wrote it would race the
-`OnFailure=` job that may still want to read it, so the next update run sweeps
-it once it is too old for anything to want.
+`reimport.sh` therefore writes the systemd **invocation ID** of the run it is
+killing into `run/aborting`, and `common.sh` and `notify.sh` compare it against
+their own before halting or mailing. By invocation rather than by age, so it
+cannot also excuse the fresh run started seconds later. The full account is in
+the comments on those three files.
 
 Either form re-downloads the extract: the last successful run deleted it and the
 import has to read something. Budget for the whole run, some fifteen hours, not
@@ -860,12 +873,13 @@ ln -s /fm/data4/graphhopper-data/build build   # freemap owns that parent; /fm/d
 sudo -u freemap ./deploy.sh --jar
 ```
 
-`deploy.sh --jar` builds and installs in one step. On a checkout with no jar yet
-there is nothing to protect, so plain `./build-jar.sh` followed by moving the
-artifact into place works too. This first one is the slow build: it clones
-upstream and fills an empty maven repository before compiling anything. See [Building the jar](#building-the-jar) for what
-the build does and why the release alone is not enough. The result belongs in
-this directory as `graphhopper-web-11.0.jar` (gitignored).
+`deploy.sh --jar` builds and installs in one step, leaving the result in this
+directory as `graphhopper-web-11.0.jar` (gitignored). Expect this first one to be
+the slow build: it clones upstream and fills an empty maven repository before it
+compiles anything.
+
+[Building the jar](#building-the-jar) explains what the build does and why the
+release alone is not enough.
 
 ### 3. Elevation tiles
 
@@ -977,17 +991,30 @@ journalctl -u graphhopper@a.service   # instance a
 journalctl -u graphhopper@b.service   # instance b
 ```
 
-## After a Hard Failure
+## After a failure
 
-`run/halted` says when it happened and why. Read it, fix the cause, then:
+**Recoverable — nothing to do.** The mirror was unreachable or served rubbish,
+the run ended quietly, and the next hourly one tries again by itself. There is no
+`run/halted`; `run/fail-streak` counts them and only every sixth sends mail. A
+`run/forcing` left from `reimport.sh` survives too, so a forced import that hit a
+bad mirror is still owed and still happens.
+
+**Hard — a human is needed.** `run/halted` says when and why, and every later run
+prints it and exits. Read it, fix the cause, then:
 
 ```bash
-rm /opt/graphhopper/run/halted                # resume hourly runs
-systemctl reset-failed gh-update.service      # clear the failed unit state
-systemctl start --no-block gh-update.service  # optional: trigger immediately
+sudo -u freemap rm /opt/graphhopper/run/halted   # resume hourly runs
+sudo systemctl reset-failed gh-update.service    # clear the failed unit state
 ```
 
-`gh-update.service` is `Type=oneshot`, so `systemctl start` blocks until the
-whole update finishes (downloading the OSM extract + importing can take a long
-time). Use `--no-block` to return immediately and let it run in the background;
-follow progress with `journalctl -fu gh-update.service`.
+The next hourly run picks up from there. To retry at once instead of on the hour:
+
+```bash
+sudo -u freemap /opt/graphhopper/reimport.sh
+```
+
+`reimport.sh` rather than `systemctl start`, because the sudoers rules cover it
+without root, and because it imports even if the mirror has published nothing new
+in the meantime — usually the case by the time a hard failure has been fixed. It
+refuses to run while `run/halted` is still there, so the order above matters.
+Follow either with `journalctl -fu gh-update.service`.
