@@ -58,10 +58,11 @@ notify() { # subject in $1, body on stdin
 # failure and halt the schedule the operator is in the middle of restarting —
 # discovered the next day, when the data has not moved.
 #
-# It is not enough for notify.sh to know this. `systemctl stop` SIGTERMs the
-# whole cgroup, so the import dies first and this script's own `|| hard_fail`
-# runs, or its EXIT trap does; both halt long before OnFailure= is reached, and
-# the run that reimport.sh then starts would read run/halted and do nothing.
+# Which of the two of us sees it depends on where the run was standing. Killed
+# mid-import, bash goes down with the java it was waiting on and neither path
+# below runs — notify.sh, reached through OnFailure=, is the one that halts.
+# Killed anywhere else, whatever the script was waiting on fails under it, and
+# `|| hard_fail` or the EXIT trap gets there first. Both ends need to know.
 #
 # The marker holds the systemd invocation ID of the run being killed, and this
 # compares it against our own, so it can only ever excuse that one run. Naming

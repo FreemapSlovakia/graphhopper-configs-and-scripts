@@ -51,10 +51,13 @@ fi
 if [ "$restart" = 1 ]; then
   # Name the run about to be killed, so that run — and only that run — can tell
   # its own death from a real one. `systemctl stop` SIGTERMs the whole cgroup,
-  # so the import dies first and gh-update.sh's `|| hard_fail` runs, or its EXIT
-  # trap does; either way it would write run/halted and mail a failure, and the
-  # run started at the bottom of this script would then read run/halted and do
-  # nothing at all. common.sh and notify.sh both check this marker.
+  # and what happens next was measured, not assumed: killed mid-import, bash
+  # goes down with its java and reports nothing, systemd records the unit failed
+  # with result 'signal', and gh-update-abort.service halts the schedule through
+  # notify.sh. Killed anywhere else, gh-update.sh's own `|| hard_fail` or EXIT
+  # trap gets there first instead. Either way run/halted appears, and the run
+  # started at the bottom of this script would read it and do nothing at all —
+  # so common.sh and notify.sh both check this marker.
   #
   # Written before the stop, because afterwards there is no invocation left to
   # ask about. Nothing running means nothing to excuse, and nothing to write —

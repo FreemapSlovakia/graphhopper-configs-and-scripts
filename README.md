@@ -255,12 +255,20 @@ instance came up but before nginx moved leaves that instance serving a half-buil
 graph, and the next run rightly refuses to clear a graph something is serving
 from. The live side, the one the nginx symlink names, is never touched.
 
-Killing a run has to be told apart from a run that died. `systemctl stop`
-SIGTERMs the whole cgroup, so the import goes first and `gh-update.sh` reaches
-its own `|| hard_fail`, or its `EXIT` trap — either of which writes `run/halted`
-and mails a failure. The run `reimport.sh` starts a moment later would then read
-`run/halted` and do nothing at all: a spurious FAILED mail, a stopped schedule,
-and the forced import silently not happening, all discovered the next day.
+Killing a run has to be told apart from a run that died, and what a kill
+actually does here was measured rather than assumed. Stopping a run mid-import
+on 2026-09-06: `systemctl stop` SIGTERMed the whole cgroup, java died, bash went
+with it (`code=killed, status=15/TERM`), its `EXIT` trap printed `---END---` but
+saw `$? = 0` and reported nothing — and systemd recorded the unit `Failed with
+result 'signal'` and fired `OnFailure=`, so `gh-update-abort.service` wrote
+`run/halted` and mailed. One second later the timer's already-queued run started
+and did nothing at all, because `run/halted` was by then there.
+
+That is the whole failure in miniature: a spurious DIED mail, a stopped
+schedule, and the import that was asked for silently not happening. Killed
+somewhere other than the import, the same story arrives by the other door —
+whatever the script was waiting on fails under it and `|| hard_fail` or the
+`EXIT` trap halts first — so both ends have to know.
 
 So `reimport.sh` writes the systemd **invocation ID** of the run it is about to
 kill into `run/aborting`, and `common.sh` and `notify.sh` both compare it

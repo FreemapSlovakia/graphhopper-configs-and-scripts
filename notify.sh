@@ -34,12 +34,19 @@ case "${1:-}" in
     fi
 
     # reimport.sh --restart kills a running import on purpose, so that the next
-    # one reads what was just deployed. The script normally notices that for
-    # itself and exits with a status, which the check above already covers; this
-    # is the remaining case, where bash took the SIGTERM without getting to run
-    # its own EXIT trap. Halting here would stop the schedule the operator is in
-    # the middle of restarting, and nobody would notice until the next day's
-    # data failed to appear.
+    # one reads what was just deployed. This is where that lands, and measured
+    # rather than assumed: an explicit `systemctl stop` really does record this
+    # unit as failed and really does fire OnFailure=, and the script's own
+    # reporting does not run at all. Observed on 2026-09-06 18:23, stopping a run that was mid-import: java was killed, bash
+# went with it (code=killed, status=15/TERM), the EXIT trap printed ---END---
+# but saw $? = 0 and so reported nothing, systemd recorded `Failed with result
+# 'signal'` and fired OnFailure=, and the timer's already-queued next run began
+# a second later and did nothing at all, because run/halted was by then there.
+    #
+    # So this is the check that matters, not a backstop for common.sh's. Halting
+    # here would stop the schedule the operator is in the middle of restarting,
+    # and the run reimport.sh starts a moment later would read run/halted and do
+    # nothing — with nobody the wiser until the next day's data failed to appear.
     #
     # Matched by invocation rather than by age, so it can only excuse the one
     # run it was written for — never the fresh run started seconds later. The
