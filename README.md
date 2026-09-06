@@ -4,7 +4,8 @@ Scripts that keep the **GraphHopper** routing data and the **Photon** geocoding
 index up to date, using systemd timers and services.
 
 Both follow the same shape — check a remote checksum, download and verify,
-import into the idle instance, health-check it, flip nginx, retire the old one
+import into the idle instance, health-check it, flip nginx, check that nginx
+really flipped, retire the old one
 — so the machinery is shared and only the service-specific steps differ.
 
 ## Scripts
@@ -107,8 +108,44 @@ fires on `OnFailure=` but stays quiet whenever `$MONITOR_SERVICE_RESULT` is
 5. Freezes `config-freemap.<i>.yml` and `custom_models/` into `run/instance.<i>/`.
 6. Imports the data into the inactive instance (`a` or `b`), from that freeze.
 7. Starts the new instance via systemd and polls until it is healthy.
-8. Switches nginx to the new instance and stops the old one.
-9. Emails the result.
+8. Switches nginx to the new instance, then confirms through nginx that the new
+   instance is the one answering.
+9. Stops the old one.
+10. Emails the result.
+
+## Switchover
+
+One vhost, `graphhopper.freemap.sk`, which `include`s `graphhopper-upstream.conf`
+inside its `location /`. That is a symlink, flipped between
+`graphhopper-upstream.{a,b}.conf` — two files of two lines each, a `proxy_pass`
+and an `add_header`. The same shape as Photon, and for the same reason: the TLS
+config, the body limit and the log paths live in one place, so they cannot drift
+between the two sides, and there is exactly one line per side left to get wrong.
+
+It used to be two complete vhosts, `graphhopper.freemap.sk.{a,b}`, differing
+only in the port. On 2026-09-06 the `b` copy was overwritten by a copy of the
+`a` copy — by a tool that preserves mtimes, so the file still read as untouched
+since August — and the next switchover pointed every request at instance `a`
+moments before stopping it. Routing was down for an hour and three quarters.
+Nothing in the run noticed: the readiness poll asks `127.0.0.1:9989` directly,
+which was perfectly healthy, and the reload did exactly what the file said.
+
+So two things guard the flip now, from opposite ends:
+
+- **Before it**, `gh-update.sh` asserts that the fragment it is about to switch
+  to names the port the new instance just answered on. A mismatch here costs
+  only the run — nothing has moved yet.
+- **After it**, `verify_through_nginx` sends the same `/route` probe to
+  `https://graphhopper.freemap.sk/` (with `--resolve`, so it can only be this
+  box's nginx answering) and requires the `X-GH-Instance` header to name the new
+  side. A status-only check would not do: the failure being caught answers 200
+  until the old instance is stopped. On failure the symlink goes back, nginx is
+  reloaded again, and the run halts with the old instance still serving.
+
+Neither subsumes the other. A fragment overwritten wholesale fails the first
+check; one whose port was corrected but whose header was not fails the second.
+`X-GH-Instance` is also on every public response, so which side is live can be
+read with `curl -I` from anywhere.
 
 ## Deploying a config change
 
@@ -188,6 +225,10 @@ cd /opt/graphhopper
 # ONCE, and only before the pull. Run after it and these two lines would copy
 # the new templates over a live instance's freeze — the very thing the freeze
 # exists to prevent.
+#
+# graphhopper.freemap.sk, not graphhopper-upstream.conf: an install this old
+# still has a symlink per vhost. The pull below lands the shared vhost too, so
+# follow this section with the next one before reloading nginx.
 live="$(readlink graphhopper.freemap.sk)"; live="${live##*.}"
 case "$live" in a | b) ;; *) echo "no live instance found: $live" >&2; exit 1 ;; esac
 runuser -u freemap -- mkdir -p "run/instance.$live/custom_models"
@@ -211,6 +252,55 @@ runuser -u freemap -- git -C /opt/graphhopper fetch --dry-run
 ```
 
 From here on it is `deploy.sh`, whenever, unattended.
+
+### Migrating to the shared vhost
+
+Once, on any install still carrying `graphhopper.freemap.sk.{a,b}` — the two
+full vhosts that the [switchover](#switchover) section replaced with one vhost
+and two fragments.
+
+`/etc/nginx/sites-enabled/graphhopper.freemap.sk` does not change: it already
+points at `/opt/graphhopper/graphhopper.freemap.sk`, and what changes is that
+the name resolves to the vhost itself rather than to a symlink to one of two.
+Which is also why the old symlink has to go before the pull — git will not
+write a tracked file over an untracked one standing in its place.
+
+nginx keeps serving from the config it holds in memory while that name is
+missing, so the only rule is not to reload until the end.
+
+```bash
+cd /opt/graphhopper
+
+# Which side is live, read the old way. This is the last moment it can be.
+live="$(readlink graphhopper.freemap.sk)"; live="${live##*.}"
+case "$live" in a | b) ;; *) echo "no live instance found: $live" >&2; exit 1 ;; esac
+
+sudo -u freemap rm graphhopper.freemap.sk
+sudo -u freemap ./deploy.sh
+sudo -u freemap ln -sfn "./graphhopper-upstream.$live.conf" graphhopper-upstream.conf
+
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+`deploy.sh` will say "nothing is live, so nothing to freeze" on this one run,
+because the symlink it reads the live side from is the one just removed. That
+is only the `--if-missing` safety net being skipped: a working install has both
+freezes already, and an install missing one has a live instance that cannot
+restart, which is not a thing this deploy would have been the first to notice.
+
+Then prove it, the same way `gh-update.sh` now proves it to itself:
+
+```bash
+curl -sS -o /dev/null -D - --resolve graphhopper.freemap.sk:443:127.0.0.1 \
+  https://graphhopper.freemap.sk/route \
+  -H 'Content-Type: application/json' \
+  --data-raw '{"profile":"car","points":[[20.7784,49.0057],[20.7958,49.0052]]}' \
+  | grep -i '^HTTP/\|^x-gh-instance'
+```
+
+`200` and an `X-GH-Instance` naming the live side. If the header is missing the
+fragment did not get included; if it names the other side, the symlink is
+pointing the wrong way.
 
 ## Elevation
 
@@ -606,7 +696,7 @@ attested here; its next import writes a whole freeze.
 
 ```bash
 cd /opt/graphhopper
-live="$(readlink graphhopper.freemap.sk)"; live="${live##*.}"
+live="$(readlink graphhopper-upstream.conf)"; live="${live#*upstream.}"; live="${live%.conf}"
 sudo -u freemap cp graphhopper-web-11.0.jar "run/instance.$live/graphhopper.jar"
 sudo -u freemap ./freeze-config.sh --check "$live"
 ```
@@ -693,7 +783,27 @@ ln -s /fm/data4/graphhopper-data/graph-cache.b graph-cache.b
 
 The targets themselves are created on first import.
 
-### 5. Sudoers
+### 5. nginx
+
+Install the vhost and point it at a side. The vhost is in the checkout; the
+symlink it includes is not, because which side is live is state, not config.
+
+```bash
+ln -s /opt/graphhopper/graphhopper.freemap.sk /etc/nginx/sites-enabled/
+ln -s ./graphhopper-upstream.a.conf /opt/graphhopper/graphhopper-upstream.conf
+nginx -t && systemctl reload nginx
+```
+
+The vhost is `include`d from `sites-enabled` by its path in the checkout rather
+than copied, so a pull that changes it needs only a reload. Certbot writes into
+the copy here, which is why the certificate lines are in the file rather than
+templated.
+
+`gh-update.sh` reads this symlink to decide which side to import into, falling
+back to unit state only if it is missing — so an install without it will import
+over whichever side systemd happens to name first.
+
+### 6. Sudoers
 
 ```
 freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
@@ -703,7 +813,7 @@ freemap ALL=(root) NOPASSWD: /bin/systemctl reload nginx, \
   /bin/systemctl disable --now photon@a, /bin/systemctl disable --now photon@b
 ```
 
-### 6. Install and enable units
+### 7. Install and enable units
 
 ```bash
 cp graphhopper@.service gh-update.service gh-update.timer gh-update-abort.service \

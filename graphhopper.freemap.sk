@@ -10,7 +10,12 @@ server {
 		# turns a long recording into a 413 in its own HTML.
 		client_max_body_size 8m;
 
-		proxy_pass http://localhost:8989/;
+		# Which instance serves traffic. gh-update.sh flips this symlink between
+		# graphhopper-upstream.{a,b}.conf and reloads nginx. One vhost and two
+		# one-line fragments rather than two whole vhosts, as in Photon: the TLS
+		# config, the body limit and the log paths then cannot drift between the
+		# two sides, and there is exactly one line per side that can be wrong.
+		include /opt/graphhopper/graphhopper-upstream.conf;
 	}
 
 	listen 443 ssl; # managed by Certbot
@@ -33,4 +38,3 @@ server {
 	server_name graphhopper.freemap.sk;
 	return 404; # managed by Certbot
 }
-

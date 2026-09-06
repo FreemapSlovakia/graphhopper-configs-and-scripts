@@ -1,7 +1,7 @@
 gh-update.conf
 run
 graphhopper-web-11.0.jar
-graphhopper.freemap.sk
+graphhopper-upstream.conf
 srtmprovider
 sonny-dem
 graph-cache.a
@@ -17,4 +17,3 @@ photon.service
 photon.freemap.sk.hardened
 # swap_symlink's staging name, left behind only if a run dies mid-swap
 *.conf.new
-graphhopper.freemap.sk.new

@@ -86,14 +86,14 @@ main() {
   # this can still repair, while the templates ahead of the pull still match it.
   local live=""
   if [ "$service" = graphhopper ]; then
-    case "$(readlink ./graphhopper.freemap.sk 2>/dev/null || true)" in
-      *graphhopper.freemap.sk.a) live=a ;;
-      *graphhopper.freemap.sk.b) live=b ;;
+    case "$(readlink ./graphhopper-upstream.conf 2>/dev/null || true)" in
+      *graphhopper-upstream.a.conf) live=a ;;
+      *graphhopper-upstream.b.conf) live=b ;;
     esac
     if [ -n "$live" ]; then
       ./freeze-config.sh --if-missing "$live"
     else
-      echo "No graphhopper.freemap.sk symlink — nothing is live, so nothing to freeze." >&2
+      echo "No graphhopper-upstream.conf symlink — nothing is live, so nothing to freeze." >&2
     fi
   fi
 

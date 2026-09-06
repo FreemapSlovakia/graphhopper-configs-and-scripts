@@ -21,6 +21,17 @@ set +a
 # once the config above has been sourced.
 take_update_lock
 
+# The one /route both readiness checks send, so what nginx is asked for is
+# exactly what the instance itself was proved able to answer. Two points a
+# kilometre apart in Šariš: far enough to need the graph, close enough that a
+# healthy instance answers in milliseconds.
+PROBE_ROUTE='{"profile":"car","points":[[20.778408050524682,49.005743088335926],[20.795849427570825,49.00523635421394]]}'
+
+# The public name, which is also the vhost's file name. Only ever used with
+# curl --resolve, so the post-switch check reaches this box's own nginx and
+# cannot be answered by anything sitting in front of it.
+SITE_HOST="graphhopper.freemap.sk"
+
 # A deadline rather than a number of tries, because a try is not a fixed length:
 # while the port still refuses connections curl returns at once and an iteration
 # is just the sleep, but once it is bound and slow the same iteration costs the
@@ -38,10 +49,56 @@ wait_for_gh_ready() {
   while [ "$SECONDS" -lt "$deadline" ]; do
     http_code="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/route" \
       -H 'Content-Type: application/json' \
-      --data-raw '{"profile":"car","points":[[20.778408050524682,49.005743088335926],[20.795849427570825,49.00523635421394]]}' \
+      --data-raw "$PROBE_ROUTE" \
       || true)"
 
     [ "$http_code" = "200" ] && return 0
+
+    sleep 5
+  done
+
+  return 1
+}
+
+# The last check of a switchover, and the only one that exercises the path a
+# user takes: TLS, the vhost, the include, the proxy_pass. Everything before it
+# proves the new instance is healthy on its own port, which is a different
+# claim from nginx sending anything there.
+#
+# It asserts *which* side answered rather than merely that something did,
+# because pointing nginx at the instance that is about to be retired is exactly
+# the mistake worth catching, and that mistake answers 200 right up until the
+# old side is stopped. On 2026-09-06 it did: the b fragment carried a's port,
+# the flip sent every request to a, and `disable --now graphhopper@a` two
+# seconds later took routing down for an hour and three quarters. The header
+# comes from the fragment nginx has just started including, so it can only say
+# `b` if the b fragment is the one in force.
+#
+# Retried for a minute rather than asked once: a reload is graceful, and there
+# is no reason to roll a good switchover back over a worker that had not
+# finished picking up the new config.
+#
+# -k because what this asserts is nginx's plumbing, not Certbot's. An expired
+# certificate is a real outage, but it is one the old instance shares, has its
+# own monitoring, and cannot be repaired by rolling this switchover back — so it
+# should not be the thing that halts an import that otherwise succeeded.
+verify_through_nginx() { # expected instance
+  local want="$1" out deadline=$((SECONDS + 60))
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    out="$(curl -sSk --max-time 15 -o /dev/null -D - -w 'http_code=%{http_code}\n' \
+      --resolve "${SITE_HOST}:443:127.0.0.1" \
+      "https://${SITE_HOST}/route" \
+      -H 'Content-Type: application/json' \
+      --data-raw "$PROBE_ROUTE" \
+      || true)"
+
+    # -qi because HTTP/2 lowercases header names, and the trailing
+    # [[:space:]]* eats the CR that -D keeps.
+    if grep -q '^http_code=200$' <<<"$out" \
+       && grep -qi "^x-gh-instance:[[:space:]]*${want}[[:space:]]*$" <<<"$out"; then
+      return 0
+    fi
 
     sleep 5
   done
@@ -136,9 +193,9 @@ fi
 
 # Where traffic actually goes rather than which units are enabled — see the
 # same comment in photon-update.sh.
-case "$(readlink ./graphhopper.freemap.sk 2>/dev/null || true)" in
-  *graphhopper.freemap.sk.a) active="a" ;;
-  *graphhopper.freemap.sk.b) active="b" ;;
+case "$(readlink ./graphhopper-upstream.conf 2>/dev/null || true)" in
+  *graphhopper-upstream.a.conf) active="a" ;;
+  *graphhopper-upstream.b.conf) active="b" ;;
   *) if systemctl is-enabled --quiet graphhopper@a; then active="a"
      elif systemctl is-enabled --quiet graphhopper@b; then active="b"
      else active="none"; fi ;;
@@ -207,14 +264,44 @@ if ! wait_for_gh_ready "$next_port"; then
   hard_fail "New instance ${next} did not become ready on localhost:${next_port}"
 fi
 
-swap_symlink "./graphhopper.freemap.sk.${next}" ./graphhopper.freemap.sk \
-  || hard_fail "Could not point ./graphhopper.freemap.sk at instance ${next}"
+# Before anything moves, because here a mismatch costs only the run — past the
+# flip below it costs live traffic. The fragment is one line and nginx cannot
+# tell a stale one from a fresh one; the port it names has to be the port
+# instance ${next} just answered on, and nothing else in the pipeline ties
+# those two together.
+#
+# This and verify_through_nginx catch the same fault from opposite ends and
+# neither subsumes the other: a fragment overwritten wholesale by a copy of the
+# other side fails here, while one whose port was corrected but whose header
+# was not fails there.
+grep -q "127\.0\.0\.1:${next_port}/" "./graphhopper-upstream.${next}.conf" \
+  || hard_fail "./graphhopper-upstream.${next}.conf does not proxy to 127.0.0.1:${next_port}, which is where instance ${next} just answered — refusing to switch traffic to it"
+
+swap_symlink "./graphhopper-upstream.${next}.conf" ./graphhopper-upstream.conf \
+  || hard_fail "Could not point ./graphhopper-upstream.conf at instance ${next}"
 
 sudo -n /bin/systemctl reload nginx || hard_fail "nginx reload failed"
 
-# Only now is this extract really in service. Recording it any earlier would
-# make the next run say "No update available" and skip a switchover that never
-# actually happened.
+echo "Verifying: ${SITE_HOST} serves instance ${next}"
+if ! verify_through_nginx "$next"; then
+  # The old instance is still running — retiring it is the next step, not this
+  # one — so putting the symlink back is a real recovery and not a gesture.
+  rolled_back=""
+  if [ "$active" = a ] || [ "$active" = b ]; then
+    if swap_symlink "./graphhopper-upstream.${active}.conf" ./graphhopper-upstream.conf \
+       && sudo -n /bin/systemctl reload nginx; then
+      rolled_back=" Traffic was rolled back to instance ${active}, which is still up."
+    else
+      rolled_back=" Rolling back to instance ${active} failed too, so routing is down."
+    fi
+  fi
+  hard_fail "nginx did not answer as instance ${next} after the switchover, even though ${next} is healthy on localhost:${next_port} — check graphhopper-upstream.${next}.conf and the vhost.${rolled_back}"
+fi
+
+# Only now is this extract really in service, and only now is that a claim
+# something checked end to end. Recording it any earlier would make the next
+# run say "No update available" and skip a switchover that never actually
+# happened.
 echo "$md5_line" > run/osm.md5
 
 sudo -n /bin/systemctl disable --now graphhopper@${active} || true
