@@ -297,123 +297,6 @@ Either form re-downloads the extract: the last successful run deleted it and the
 import has to read something. Budget for the whole run, some fifteen hours, not
 for the minutes the change took to write.
 
-### Migrating an install that predates the freeze
-
-Once, on a checkout whose `gh-update.sh` does not take the lock yet, so this is
-the one deployment that has to wait the hard way.
-
-Run the whole block **as root**, in `tmux`, and leave it — the loop does the
-waiting. Root because none of the timer and unit commands here are in the
-passwordless sudoers set, and a `sudo` partway down would sit at a password
-prompt hours later with nobody there to answer it. The file operations drop
-back to the service user with `runuser`, so nothing in the checkout ends up
-owned by root.
-
-```bash
-systemctl stop gh-update.timer
-
-# Not `systemctl is-active`: gh-update.service is Type=oneshot with no
-# RemainAfterExit, so while its ExecStart is running the unit sits in
-# `activating`, which is-active reports as false. The loop would fall straight
-# through into a live import — the one thing this block exists to avoid.
-while :; do
-  state="$(systemctl show -p ActiveState --value gh-update.service)"
-  case "$state" in inactive | failed) break ;; esac
-  sleep 60
-done
-
-cd /opt/graphhopper
-
-# What the live instance is running on, captured before the pull moves it.
-# freeze-config.sh is not here yet, hence by hand. The live side only: the idle
-# one's graph came from an older generation of these templates, so freezing
-# today's for it would assert a match nobody established, and the next import
-# rebuilds that side from scratch regardless.
-#
-# Which side is live comes from the nginx symlink, as it does in both updaters —
-# where traffic actually goes, not which units are enabled. Unit state would be
-# wrong here: an instance reads as inactive through every RestartSec hold.
-#
-# ONCE, and only before the pull. Run after it and these two lines would copy
-# the new templates over a live instance's freeze — the very thing the freeze
-# exists to prevent.
-#
-# graphhopper.freemap.sk, not graphhopper-upstream.conf: an install this old
-# still has a symlink per vhost. The pull below lands the shared vhost too, so
-# follow this section with the next one before reloading nginx.
-live="$(readlink graphhopper.freemap.sk)"; live="${live##*.}"
-case "$live" in a | b) ;; *) echo "no live instance found: $live" >&2; exit 1 ;; esac
-runuser -u freemap -- mkdir -p "run/instance.$live/custom_models"
-runuser -u freemap -- cp "config-freemap.$live.yml" "run/instance.$live/config.yml"
-
-runuser -u freemap -- git pull --ff-only
-
-# daemon-reload restarts nothing, so the live instance keeps its old command
-# line until it next stops — and when it does come back it reads the freeze
-# above, which still matches the graph it has.
-install -m644 graphhopper@.service /etc/systemd/system/
-systemctl daemon-reload
-
-systemctl start gh-update.timer
-```
-
-Check first that the pull will not want anything typed at it:
-
-```bash
-runuser -u freemap -- git -C /opt/graphhopper fetch --dry-run
-```
-
-From here on it is `deploy.sh`, whenever, unattended.
-
-### Migrating to the shared vhost
-
-Once, on any install still carrying `graphhopper.freemap.sk.{a,b}` — the two
-full vhosts that the [switchover](#switchover) section replaced with one vhost
-and two fragments.
-
-`/etc/nginx/sites-enabled/graphhopper.freemap.sk` does not change: it already
-points at `/opt/graphhopper/graphhopper.freemap.sk`, and what changes is that
-the name resolves to the vhost itself rather than to a symlink to one of two.
-Which is also why the old symlink has to go before the pull — git will not
-write a tracked file over an untracked one standing in its place.
-
-nginx keeps serving from the config it holds in memory while that name is
-missing, so the only rule is not to reload until the end.
-
-```bash
-cd /opt/graphhopper
-
-# Which side is live, read the old way. This is the last moment it can be.
-live="$(readlink graphhopper.freemap.sk)"; live="${live##*.}"
-case "$live" in a | b) ;; *) echo "no live instance found: $live" >&2; exit 1 ;; esac
-
-sudo -u freemap rm graphhopper.freemap.sk
-sudo -u freemap ./deploy.sh
-sudo -u freemap ln -sfn "./graphhopper-upstream.$live.conf" graphhopper-upstream.conf
-
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-`deploy.sh` will say "nothing is live, so nothing to freeze" on this one run,
-because the symlink it reads the live side from is the one just removed. That
-is only the `--if-missing` safety net being skipped: a working install has both
-freezes already, and an install missing one has a live instance that cannot
-restart, which is not a thing this deploy would have been the first to notice.
-
-Then prove it, the same way `gh-update.sh` now proves it to itself:
-
-```bash
-curl -sS -o /dev/null -D - --resolve graphhopper.freemap.sk:443:127.0.0.1 \
-  https://graphhopper.freemap.sk/route \
-  -H 'Content-Type: application/json' \
-  --data-raw '{"profile":"car","points":[[20.7784,49.0057],[20.7958,49.0052]]}' \
-  | grep -i '^HTTP/\|^x-gh-instance'
-```
-
-`200` and an `X-GH-Instance` naming the live side. If the header is missing the
-fragment did not get included; if it names the other side, the symlink is
-pointing the wrong way.
-
 ## Elevation
 
 Elevation comes from Sonny's LiDAR DTM (1", Europe), not SRTM. The tiles are
@@ -780,45 +663,14 @@ To put a new jar in front of traffic sooner than the next timer run, import —
 way to swap the jar under a serving graph, because there is no way to know it
 still means the same thing.
 
-**Migrating a freeze written before the jar was part of one** — a one-off, and
-only for instances whose freeze predates this.
-
-Do it in the same sitting as the `deploy.sh` that pulls this, not "before
-installing the new unit": `ExecStartPre=… --check %i` is already in the running
-unit, so a freeze becomes incomplete the moment the new `freeze-config.sh`
-arrives, whether or not `graphhopper@.service` has been reinstalled. From then
-until this runs, the live instance cannot come back from a restart. `deploy.sh`
-exits non-zero on the unit comparison right after that pull and prints only the
-install command, so this block will not come to you — come to it.
-
-The live side only, and `deploy.sh` names it the same way, from the nginx
-symlink. Copying the checkout's jar in is honest there because the unit read
-that same path directly before freezes held a jar — but only if no jar has been
-installed by rename since that instance last started, since the running JVM
-keeps its old inode while the checkout gets a new file. If one has, import
-instead. The idle side is not running anything, so nothing about it can be
-attested here; its next import writes a whole freeze.
-
-```bash
-cd /opt/graphhopper
-live="$(readlink graphhopper-upstream.conf)"; live="${live#*upstream.}"; live="${live%.conf}"
-sudo -u freemap cp graphhopper-web-11.0.jar "run/instance.$live/graphhopper.jar"
-sudo -u freemap ./freeze-config.sh --check "$live"
-```
-
-`freeze-config.sh --if-missing` does the same thing on its own from the next
-deploy onward — it completes a freeze in place rather than rewriting one — so
-this is only needed for the deploy that lands the change itself.
-
 Once a release contains the first three — #3183, #3235 and `5697f586b40a` —
 most of this section goes away, but not all of it. `0004-trail-colours.patch`
 has no upstream counterpart and never will be released; it has to be reapplied
 to whatever release replaces this one, or the jar refuses to start against a
 `graph.encoded_values` that names `hiking_colours`. Until then a release
 carrying only some of the three still needs whichever checks above it does not
-cover. Read the 12.0 migration notes before
-jumping, and re-verify `max_slope` on a flat urban route afterwards, since #3293
-rewrote how it is derived.
+cover. Read the 12.0 migration notes before jumping, and re-verify `max_slope`
+on a flat urban route afterwards, since #3293 rewrote how it is derived.
 
 ## Failure Handling
 
