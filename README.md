@@ -348,7 +348,7 @@ something.
 `FootPriorityParser` is Java, and its output is the only representation we have of
 `foot=designated`, `foot=use_sidepath`, `sidewalk=no|none|separate`,
 `bicycle=designated` and "maxspeed ≤ 20 counts as safe". None of those is an
-encoded value in 11.0.
+encoded value in 11.1.
 
 ### The road ladder
 
@@ -489,13 +489,15 @@ across 1366 stops, alongside 2177 rail routes and 2312 trips from ZSSK.
 
 ## Building the jar
 
-`graphhopper-web-11.0.jar` is **not** the official release jar. Two commits are
-cherry-picked onto the 11.0 tag, and three more are applied from `patches/`.
+`graphhopper-web-11.1.jar` is **not** the official release jar. Two commits are
+cherry-picked onto the 11.1 tag, and three more are applied from `patches/`.
+11.1 is 11.0 plus a security fix to custom-model condition parsing, cut from
+the `11.x` branch, so it carries none of them.
 
 The `sonny` elevation provider was added in
 [#3183](https://github.com/graphhopper/graphhopper/pull/3183) on 2025-11-12,
-four weeks after 11.0 was tagged, and is still unreleased — as of 2026-09, 11.0
-remains the newest release and the commit exists only on `master`
+four weeks after 11.0 was tagged, and is still unreleased — as of 2026-09 the
+commit exists only on `master`
 (`12.0-SNAPSHOT`). The stock jar aborts the import with
 `IllegalArgumentException: Did not find elevation provider: sonny`.
 
@@ -508,7 +510,7 @@ reaches every sea Europe has — Adriatic, Baltic, North Sea, Aegean, the Channe
 The third is ours to carry: `patches/0003-max-slope-short-segments.patch`, a
 backport of upstream `5697f586b40a`.
 
-`SlopeCalculator` returns early for edges below `MIN_LENGTH` (8 m) and, in 11.0,
+`SlopeCalculator` returns early for edges below `MIN_LENGTH` (8 m) and, in 11.x,
 sets only `average_slope` to 0 on that path. `MaxSlope` is created with
 `negateReverseDirection`, which gives it a `minStorableValue` of -31, so an
 untouched `max_slope` decodes to **-31 % forward and +31 % reverse**. Every
@@ -518,7 +520,7 @@ unnoticed upstream because no built-in custom model reads `max_slope`; ours do,
 and `stroller.json` blocking on `|max_slope| > 12` severed the pedestrian graph
 into unreachable fragments. Upstream's own fix does not cherry-pick, because
 #3293 had already moved the calculation to a post-import `execute(Graph)` pass,
-so the two lines are reapplied to 11.0's `TagParser` form by hand.
+so the two lines are reapplied to 11.x's `TagParser` form by hand.
 
 The fourth is ours outright, with no upstream counterpart:
 `patches/0004-trail-colours.patch` adds the encoded values `hiking_colours` and
@@ -575,7 +577,7 @@ rather than a second patch we own forever.
 Rather than run `12.0-SNAPSHOT` — ten months of unreleased changes, including
 `CustomWeighting` returning 10× its previous values, `max_speed` becoming a
 required encoded value, and country rules moving into parsers — the release is
-used with those commits applied. The two cherry-picks go cleanly: 11.0 already
+used with those commits applied. The two cherry-picks go cleanly: 11.1 already
 has the `AbstractSRTMElevationProvider` constructor #3183 builds on, and the PR
 only adds two self-contained classes plus four lines of dispatch in
 `GraphHopper.java`, while #3235 is a single condition in `OSMReader`.
@@ -586,7 +588,7 @@ only adds two self-contained classes plus four lines of dispatch in
 sudo -u freemap /opt/graphhopper/build-jar.sh
 ```
 
-It clones or fetches upstream into `build/`, resets a detached tree to the 11.0
+It clones or fetches upstream into `build/`, resets a detached tree to the 11.1
 tag, applies the two cherry-picks and then every `patches/*.patch` in name
 order, and builds `web` with `-am`. Rebuilt from the tag on every run rather
 than updated in place: a run that died half way through a `git am` leaves a tree
@@ -631,8 +633,9 @@ whether a patch still applies before committing to a deploy. Installing what it
 built is `deploy.sh --jar`, which does both under one lock — see
 [Deploying a jar change](#deploying-a-jar-change).
 
-The tag's pom says `11.0-SNAPSHOT`, so the artifact is staged under the name it
-is installed as, `graphhopper-web-11.0.jar`. That name is written down in two
+The 11.1 tag's pom still says `11.0-SNAPSHOT` (`POM_VERSION` in the script),
+so the artifact is staged under the name it is installed as,
+`graphhopper-web-11.1.jar`. That name is written down in two
 places — `JAR` in `build-jar.sh` and the `jar=` line in `freeze-config.sh` —
 and the script refuses to build if they disagree, so a version bump stays a
 deliberate edit in both rather than a silent mismatch in one. Neither
@@ -726,7 +729,7 @@ sudo -u freemap ./deploy.sh --jar
 ```
 
 `deploy.sh --jar` builds and installs in one step, leaving the result in this
-directory as `graphhopper-web-11.0.jar` (gitignored). Expect this first one to be
+directory as `graphhopper-web-11.1.jar` (gitignored). Expect this first one to be
 the slow build: it clones upstream and fills an empty maven repository before it
 compiles anything.
 

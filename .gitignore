@@ -1,6 +1,6 @@
 gh-update.conf
 run
-graphhopper-web-11.0.jar
+graphhopper-web-*.jar
 build
 graphhopper-upstream.conf
 srtmprovider

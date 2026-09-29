@@ -2,7 +2,7 @@
 
 # Freeze the config, the custom models and the jar an instance will run with.
 #
-# config-freemap.{a,b}.yml, custom_models/ and graphhopper-web-11.0.jar are
+# config-freemap.{a,b}.yml, custom_models/ and graphhopper-web-11.1.jar are
 # templates. Nothing reads them directly: an instance reads run/instance.<i>/,
 # written here.
 #
@@ -81,7 +81,7 @@ dest="run/instance.${instance}"
 # The template, carrying its build's version, and the fixed name it is frozen
 # under. Only this line changes when the jar is bumped; the unit, the import and
 # every existing freeze go on naming frozen_jar.
-jar=graphhopper-web-11.0.jar
+jar=graphhopper-web-11.1.jar
 frozen_jar=graphhopper.jar
 
 # Both halves, never just the config: a freeze whose models went missing — an

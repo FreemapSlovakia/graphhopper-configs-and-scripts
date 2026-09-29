@@ -204,14 +204,12 @@ governs. Worth re-checking there before any larger redistribution.
 
 The `sonny` provider was added in
 [PR #3183](https://github.com/graphhopper/graphhopper/pull/3183) (Nov 2025),
-**after the 11.0 release**, and is not on the `11.x` branch. On the currently
-deployed `graphhopper-web-11.0.jar` this config aborts the import immediately
-with
+**after the 11.0 release**, and is not on the `11.x` branch, so 11.1 lacks it
+too. On a stock jar this config aborts the import immediately with
 
 ```
 java.lang.IllegalArgumentException: Did not find elevation provider: sonny
 ```
 
-which `gh-update.sh` turns into a hard failure and a halt. A jar built from
-`master` (or the first release that includes #3183) is required before these
-configs can be used.
+which `gh-update.sh` turns into a hard failure and a halt. The deployed jar
+cherry-picks #3183 — see "Building the jar" in README.md.

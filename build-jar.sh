@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Build the jar this deployment runs: the 11.0 release, plus the two upstream
+# Build the jar this deployment runs: the 11.1 release, plus the two upstream
 # commits it predates and the patches we carry on top.
 #
 # Run it on its own to check that a patch still applies and its tests still
@@ -25,9 +25,12 @@ exec 3>&1 1>&2
 
 UPSTREAM=https://github.com/graphhopper/graphhopper.git
 
-# The release everything is built on, and the version in the artifact maven
-# writes (the tag's pom says 11.0-SNAPSHOT).
-BASE=11.0
+# The release everything is built on.
+BASE=11.1
+
+# The version maven writes into the artifact's name, which is the tag's pom and
+# not the tag: 11.1's pom still says 11.0-SNAPSHOT.
+POM_VERSION=11.0-SNAPSHOT
 
 # Upstream commits, cherry-picked only because they are unreleased. Each one
 # leaves this list the moment a release carries it; neither is ours to keep.
@@ -39,7 +42,7 @@ CHERRY_PICKS=(
 # The name the template is installed under. freeze-config.sh names it too, and
 # a version bump has to move both — so this is checked against that file rather
 # than read from it, leaving the bump a deliberate edit in each place.
-JAR=graphhopper-web-11.0.jar
+JAR=graphhopper-web-11.1.jar
 
 # git cherry-pick and git am both write commits, and git refuses to write one
 # for somebody it cannot name. The service user this runs as has no identity and
@@ -138,8 +141,8 @@ nice -n 10 "${mvn[@]}" -pl core -am test -Dtest=SlopeCalculatorTest,OSMTrailColo
 nice -n 10 "${mvn[@]}" -pl web -am test -Dtest=PtRouteResourceTest -DfailIfNoTests=false \
   || fail "the web tests failed"
 
-built="$src/web/target/graphhopper-web-${BASE}-SNAPSHOT.jar"
-[ -f "$built" ] || fail "the build produced no ${built}"
+built="$src/web/target/graphhopper-web-${POM_VERSION}.jar"
+[ -f "$built" ] || fail "the build produced no ${built} — does the ${BASE} tag's pom still say ${POM_VERSION}?"
 
 # Checked in the artifact rather than inferred from a clean build, because a
 # jar quietly missing one of these is the expensive failure: the import does not
