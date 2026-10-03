@@ -204,20 +204,44 @@ stored_md5() {
 }
 
 # Fetch a "<hash>  <filename>" checksum file and set md5_line / remote_md5. A
-# proxy error page or an empty body would sail through wget's exit code check,
-# so the shape is validated too.
+# proxy error page or an empty body would sail through an exit code check, so
+# the shape is validated too.
+#
+# Size-capped, and curl rather than wget for exactly that: on 2026-10-01 a
+# Geofabrik proxy answered the .md5 URL with gigabytes of binary, bash read all
+# of it into md5_line, and at about 15 GB bash itself segfaulted. wget has no
+# cap for a single download, and cutting it off with `| head` would fail the
+# pipeline under pipefail. --max-filesize also stops a transfer mid-stream
+# when the server sends no length.
+#
+# Returns 1 on a 404 and fails on anything else, so a caller looking for a file
+# whose name it has to guess can try the next one. fetch_md5 is the form for a
+# file that has to be there.
 #
 # Sets globals rather than echoing on purpose: as a $(...) helper, the
 # soft_fail/hard_fail inside it would run in a subshell, where exit ends only
 # the subshell and the run carries on — past a checksum it never managed to
 # read. Nothing below may call the *_fail functions from a subshell.
-fetch_md5() { # url
-  local url="$1"
-  md5_line="$(wget "${WGET_RETRY_OPTS[@]}" -q -O - "$url")" \
-    || wget_failed $? "Could not fetch $url"
+try_fetch_md5() { # url
+  local url="$1" out rc=0 code
+  out="$(curl -sS -L --max-filesize 4096 --max-time 300 \
+    --retry 4 --retry-delay 30 --retry-connrefused \
+    -w '\n%{http_code}' "$url")" || rc=$?
+  [ "$rc" -ne 63 ] \
+    || soft_fail "$url is far larger than a checksum file — the mirror is serving something else under that name"
+  [ "$rc" -eq 0 ] || soft_fail "Could not fetch $url (curl exit $rc)"
+  # The status comes last, on its own line; the checksum is the first line.
+  code="${out##*$'\n'}"
+  md5_line="${out%%$'\n'*}"
+  [ "$code" != 404 ] || return 1
+  [ "$code" = 200 ] || soft_fail "Could not fetch $url (HTTP $code)"
   remote_md5="${md5_line%% *}"
   [[ "$remote_md5" =~ ^[0-9a-f]{32}$ ]] \
     || soft_fail "Unexpected content in ${url}: ${md5_line:0:200}"
+}
+
+fetch_md5() { # url
+  try_fetch_md5 "$1" || soft_fail "Could not fetch $1 (HTTP 404)"
 }
 
 # wget exit 3 is a local file I/O error (no space left, bad permissions on

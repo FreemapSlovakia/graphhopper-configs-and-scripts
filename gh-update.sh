@@ -212,15 +212,45 @@ fetch_gtfs() { # name, url
   hard_fail "GTFS feed ${name} could not be fetched from ${url} and there is no previous copy at ${dest}"
 }
 
-# GEOFABRIK_URL is set in gh-update.conf
-pbf_file="run/$(basename "$GEOFABRIK_URL")"
+# GEOFABRIK_URL is set in gh-update.conf, as the -latest name. Only its stem is
+# used: Geofabrik stopped publishing europe-latest.osm.pbf.md5 on 2026-10-01,
+# on every proxy, while the dated europe-YYMMDD files carried on. So look for
+# the newest dated extract instead, a day at a time. Downloading it by its
+# dated name has a second use: it cannot change underneath a download that
+# takes an hour, the way -latest can.
+#
+# Only a 404 moves on to the day before. Any other failure ends the run, so a
+# mirror having a bad minute cannot make us settle for an older extract.
+geofabrik_stem="${GEOFABRIK_URL%-latest.osm.pbf}"
+extract_url=""
+for days_ago in 0 1 2 3 4 5 6 7; do
+  candidate="${geofabrik_stem}-$(date -u -d "-${days_ago} day" +%y%m%d).osm.pbf"
+  # Sets md5_line and remote_md5.
+  if try_fetch_md5 "${candidate}.md5"; then
+    extract_url="$candidate"
+    break
+  fi
+done
+[ -n "$extract_url" ] \
+  || soft_fail "No dated extract from the last 8 days at ${geofabrik_stem}-YYMMDD.osm.pbf"
+pbf_file="run/$(basename "$extract_url")"
+echo "Newest extract: $(basename "$extract_url")"
 
-# Sets md5_line and remote_md5.
-fetch_md5 "${GEOFABRIK_URL}.md5"
+# A partial download is named after its date, so one left over from an extract
+# that has since been superseded would otherwise sit in run/ for good.
+for stale in run/"$(basename "$geofabrik_stem")"-*.osm.pbf; do
+  [ -e "$stale" ] && [ "$stale" != "$pbf_file" ] || continue
+  echo "Removing superseded download $stale"
+  rm -f "$stale"
+done
 
-# run/osm.md5 holds the full remote line; compare only the hash.
+# run/osm.md5 holds the full remote line; compare only the hash. The dated names
+# sort by date, so the second test keeps a mirror that has lost its newest
+# files from walking the data backwards.
 trigger="new extract"
-if [ "$(stored_md5 run/osm.md5)" = "$remote_md5" ]; then
+stored_name="$(awk '{print $2}' run/osm.md5 2>/dev/null || true)"
+if [ "$(stored_md5 run/osm.md5)" = "$remote_md5" ] \
+  || [[ "$(basename "$extract_url")" < "$stored_name" ]]; then
   if [ "$force" = 0 ]; then
     echo "No update available"
     clear_failure_streak
@@ -243,7 +273,7 @@ case "$(readlink ./graphhopper-upstream.conf 2>/dev/null || true)" in
 esac
 echo "Active: $active"
 
-download_and_verify "$GEOFABRIK_URL" "$remote_md5" osm
+download_and_verify "$extract_url" "$remote_md5" osm
 
 echo "Extracting"
 osmium extract --set-bounds -p limit.geojson "$pbf_file" -o run/extract.pbf --overwrite \
