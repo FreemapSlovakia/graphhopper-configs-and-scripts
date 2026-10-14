@@ -204,7 +204,9 @@ graphhopper:
   # the import still succeeds — every details=hiking_colours request then fails
   # with a 400. The temporal ones mark conditional access as of the import day,
   # and {car,bike,foot}_temporal.json is what turns that into a block.
-  graph.encoded_values: average_slope,bike_access,bike_average_speed,bike_colours,bike_priority,bike_road_access,bike_temporal_access,car_access,car_average_speed,car_temporal_access,country,curvature,foot_access,foot_average_speed,foot_network,foot_priority,foot_road_access,foot_temporal_access,get_off_bike,hike_rating,hiking_colours,max_slope,mtb_access,mtb_average_speed,mtb_priority,mtb_rating,racingbike_access,racingbike_average_speed,racingbike_priority,road_access,road_class,roundabout,smoothness,surface,toll,track_type
+  # max_speed is added by GraphHopper whether listed or not, and filled from
+  # legal defaults by max_speed_calculator below; listing it changes nothing.
+  graph.encoded_values: average_slope,bike_access,bike_average_speed,bike_colours,bike_priority,bike_road_access,bike_temporal_access,car_access,car_average_speed,car_temporal_access,country,curvature,foot_access,foot_average_speed,foot_network,foot_priority,foot_road_access,foot_temporal_access,get_off_bike,hike_rating,hiking_colours,max_slope,max_speed,mtb_access,mtb_average_speed,mtb_priority,mtb_rating,racingbike_access,racingbike_average_speed,racingbike_priority,road_access,road_class,roundabout,smoothness,surface,toll,track_type
 
   #### Speed, hybrid and flexible mode ####
 
