@@ -225,9 +225,12 @@ geofabrik_stem="${GEOFABRIK_URL%-latest.osm.pbf}"
 extract_url=""
 for days_ago in 0 1 2 3 4 5 6 7; do
   candidate="${geofabrik_stem}-$(date -u -d "-${days_ago} day" +%y%m%d).osm.pbf"
-  # Sets md5_line and remote_md5.
-  if try_fetch_md5 "${candidate}.md5"; then
-    extract_url="$candidate"
+  # Sets resolved_url, then md5_line and remote_md5.
+  try_resolve_url "$candidate" || continue
+  [ "$(basename "$resolved_url")" = "$(basename "$candidate")" ] \
+    || soft_fail "$candidate redirects to an unexpected name: $resolved_url"
+  if try_fetch_md5 "${resolved_url}.md5"; then
+    extract_url="$resolved_url"
     break
   fi
 done

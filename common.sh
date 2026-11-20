@@ -244,6 +244,24 @@ fetch_md5() { # url
   try_fetch_md5 "$1" || soft_fail "Could not fetch $1 (HTTP 404)"
 }
 
+# Follow redirects and set resolved_url to where the file is actually served.
+# Returns 1 on a 404. A checksum must come from beside the resolved file:
+# Geofabrik redirects a moved .pbf but keeps serving an outdated .md5 at the old
+# path. Sets a global for the same reason as try_fetch_md5.
+try_resolve_url() { # url
+  local url="$1" out rc=0 code
+  # TODO a mirror that rejects HEAD or answers it with a non-200 2xx would fail
+  # every run; switch to a one-byte ranged GET if that ever happens.
+  out="$(curl -sS -L -I -o /dev/null --max-time 300 \
+    --retry 4 --retry-delay 30 --retry-connrefused \
+    -w '%{http_code} %{url_effective}' "$url")" || rc=$?
+  [ "$rc" -eq 0 ] || soft_fail "Could not resolve $url (curl exit $rc)"
+  code="${out%% *}"
+  [ "$code" != 404 ] || return 1
+  [ "$code" = 200 ] || soft_fail "Could not resolve $url (HTTP $code)"
+  resolved_url="${out#* }"
+}
+
 # wget exit 3 is a local file I/O error (no space left, bad permissions on
 # run/). Waiting for the next run won't fix that, and re-fetching tens of
 # gigabytes onto a full disk is worse than useless, so take the hard path.
